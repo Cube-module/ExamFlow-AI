@@ -4,7 +4,7 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -29,16 +29,118 @@ async def start(message: Message):
 • Достижения – получай бейджи за успехи
 • Персональная статистика – отслеживай свой рост
 
-Готов начать обучение? Используй /help для подробной информации о командах.
-
-Удачи в подготовке! 
+Выбери курс, чтобы начать обучение:
 """
-    await message.answer(welcome_text)
+
+    # Создаем клавиатуру с курсами
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Математика ЕГЭ (Профиль)")],
+            [KeyboardButton(text="💻 Информатика ЕГЭ")],
+            [KeyboardButton(text="📐 Математика ОГЭ")],
+            [KeyboardButton(text="🖥 Информатика ОГЭ")],
+            [KeyboardButton(text="ℹ️ Помощь")]
+        ],
+        resize_keyboard=True
+    )
+
+    await message.answer(welcome_text, reply_markup=keyboard)
 
 
 @dp.message(Command("help"))
 async def help_handler(message: Message):
-    await message.answer("<Пояснение работы бота>")
+    help_text = """
+📚 Доступные команды:
+
+/start - Начать работу с ботом и выбрать курс
+/help - Показать эту справку
+
+🎓 Как работать с ботом:
+1. Выбери курс из предложенных кнопок
+2. Проходи уроки последовательно
+3. Решай задачи для закрепления материала
+4. Поддерживай серию дней для мотивации
+
+Удачи в обучении!
+"""
+    await message.answer(help_text)
+
+
+@dp.message(lambda message: message.text == "📊 Математика ЕГЭ (Профиль)")
+async def math_ege_profile(message: Message):
+    course_info = """
+📊 Математика ЕГЭ (Профильный уровень)
+
+Курс включает:
+• Алгебра и начала анализа
+• Геометрия (планиметрия и стереометрия)
+• Уравнения и неравенства
+• Функции и графики
+• Задачи с параметрами
+
+Статус: В разработке 🚧
+Скоро здесь появятся уроки и практические задания!
+"""
+    await message.answer(course_info)
+
+
+@dp.message(lambda message: message.text == "💻 Информатика ЕГЭ")
+async def informatics_ege(message: Message):
+    course_info = """
+💻 Информатика ЕГЭ
+
+Курс включает:
+• Системы счисления
+• Алгоритмизация и программирование
+• Логика и комбинаторика
+• Информационные модели
+• Работа с файлами и базами данных
+
+Статус: В разработке 🚧
+Скоро здесь появятся уроки и практические задания!
+"""
+    await message.answer(course_info)
+
+
+@dp.message(lambda message: message.text == "📐 Математика ОГЭ")
+async def math_oge(message: Message):
+    course_info = """
+📐 Математика ОГЭ
+
+Курс включает:
+• Арифметика и алгебра
+• Геометрия на плоскости
+• Функции и графики
+• Текстовые задачи
+• Вероятность и статистика
+
+Статус: В разработке 🚧
+Скоро здесь появятся уроки и практические задания!
+"""
+    await message.answer(course_info)
+
+
+@dp.message(lambda message: message.text == "🖥 Информатика ОГЭ")
+async def informatics_oge(message: Message):
+    course_info = """
+🖥 Информатика ОГЭ
+
+Курс включает:
+• Основы алгоритмизации
+• Системы счисления (базовый уровень)
+• Работа с электронными таблицами
+• Логические выражения
+• Основы программирования
+
+Статус: В разработке 🚧
+Скоро здесь появятся уроки и практические задания!
+"""
+    await message.answer(course_info)
+
+
+@dp.message(lambda message: message.text == "ℹ️ Помощь")
+async def help_button_handler(message: Message):
+    await help_handler(message)
 
 
 async def main():
