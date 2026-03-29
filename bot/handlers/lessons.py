@@ -21,7 +21,7 @@ class LessonState(StatesGroup):
 
 @router.callback_query(F.data.startswith("lesson_"))
 async def show_lesson(callback: types.CallbackQuery):
-    lesson_id = callback.data.split("_", 1)[1]
+    lesson_id = callback.data.removeprefix("lesson_")
     # TODO: загрузить реальный контент урока из JSON по lesson_id
     content = "Теория про квадратные уравнения..."
 
@@ -41,6 +41,7 @@ async def show_lesson(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("next_lesson_"))
 async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
+    lesson_id = callback.data.removeprefix("next_lesson_")
     await state.clear()
     # TODO: определить следующий lesson_id по текущему и загрузить его контент
     await callback.message.answer("✅ Урок отмечен как пройденный!\n\nСледующий урок появится здесь после добавления контента.")
@@ -49,7 +50,7 @@ async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("ask_ai_"))
 async def ask_ai_explanation(callback: types.CallbackQuery, state: FSMContext):
-    lesson_id = callback.data.split("_", 1)[1]
+    lesson_id = callback.data.removeprefix("ask_ai_")
     await state.set_state(LessonState.asking_ai)
     await state.update_data(lesson_id=lesson_id)
     await callback.message.answer("🤔 Напиши, что именно непонятно, и я объясню:")
@@ -70,7 +71,7 @@ async def handle_ai_question(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("practice_"))
 async def start_practice(callback: types.CallbackQuery, state: FSMContext):
-    lesson_id = callback.data.split("_", 1)[1]
+    lesson_id = callback.data.removeprefix("practice_")
     # TODO: передавать реальную тему урока из JSON по lesson_id
     tasks = await llm_service.generate_tasks(topic=lesson_id, count=3)
 

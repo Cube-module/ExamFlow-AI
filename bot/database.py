@@ -78,12 +78,3 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
     return user
 
 
-async def save_course_selection(session: AsyncSession, telegram_id: int, course_name: str) -> None:
-    result = await session.execute(
-        select(User).where(User.telegram_id == str(telegram_id))
-    )
-    user = result.scalar_one_or_none()
-
-    if user is not None:
-        user.selected_course = course_name
-        await session.commit()

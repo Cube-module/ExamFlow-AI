@@ -1,10 +1,10 @@
 import logging
 
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
-from database import async_session, get_or_create_user, save_course_selection
+from database import async_session, get_or_create_user
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +133,15 @@ async def help_handler(message: Message):
 @router.message(F.text.in_(COURSES))
 async def course_handler(message: Message):
     async with async_session() as session:
-        await save_course_selection(session, message.from_user.id, message.text)
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        user.selected_course = message.text
+        await session.commit()
         logger.info("User %s selected course: %s", message.from_user.id, message.text)
 
     await message.answer(COURSES[message.text])
 
 
-@router.message()
+@router.message(StateFilter(None))
 async def fallback_handler(message: Message):
     await message.answer(
         "Не понял команду. Выбери курс из меню или напиши /help.",
