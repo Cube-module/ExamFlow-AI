@@ -1,0 +1,115 @@
+
+# БЕЗОПАСНОСТЬ (Самое важное!)
+# Файлы с токенами, паролями и ключами
+.env
+.env.local
+.env.production
+config_secret.py
+credentials.json
+
+
+# PYTHON
+# Кэшированные файлы
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Виртуальное окружение (у всех разное)
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+envs/
+
+# Conda
+conda-meta/
+*.conda
+
+# Дистрибутивы и билды
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Установочные скрипты
+pip-log.txt
+pip-delete-this-directory.txt
+
+# БАЗЫ ДАННЫХ (Локальные)
+# SQLite файлы (если локально)
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Файлы миграций (если генерируются авто)
+alembic.ini
+# Но! Папку с миграциями лучше оставить:
+# !alembic/versions/
+
+
+# ЛОГИ И ВРЕМЕННЫЕ ФАЙЛЫ
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+
+# IDE И РЕДАКТОРЫ
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+
+# ОПЕРАЦИОННЫЕ СИСТЕМЫ
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+
+# TELEGRAM SPECIFIC
+# Временные файлы бота
+session/
+sessions/
+*.session
+*.session-journal
+
+# ТЕСТЫ И ПОКРЫТИЕ
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ЗАВИСИМОСТИ
+# Папка с модулями (если локально)
+lib/
+lib64/
+
+# Но файл зависимостей ОСТАВИТЬ!
+# !requirements.txt
