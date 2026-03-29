@@ -5,12 +5,13 @@ import os
 from aiogram import Bot, Dispatcher
 
 from database import init_db
-from handlers import start
+from handlers import lessons, start
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 dp = Dispatcher()
 dp.include_router(start.router)
+dp.include_router(lessons.router)
 
 
 async def main():
