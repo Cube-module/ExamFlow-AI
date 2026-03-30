@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User
+from services.achievements import check_and_award
 
 
 async def update_streak(session: AsyncSession, user: User) -> None:
@@ -38,3 +39,4 @@ async def update_streak(session: AsyncSession, user: User) -> None:
         user.last_activity_date = now
 
     await session.commit()
+    await check_and_award(session, user)

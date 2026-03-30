@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, relationship, selectinload
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///examflow.db")
 
@@ -37,6 +37,7 @@ class UserProgress(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    course_id = Column(String)
     lesson_id = Column(String)
     status = Column(String)  # 'locked', 'in_progress', 'completed'
     score = Column(Integer, default=0)
@@ -59,6 +60,15 @@ class UserAchievement(Base):
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def get_user_profile(session: AsyncSession, telegram_id: int) -> User | None:
+    result = await session.execute(
+        select(User)
+        .where(User.telegram_id == str(telegram_id))
+        .options(selectinload(User.progress), selectinload(User.achievements))
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:

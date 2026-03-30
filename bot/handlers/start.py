@@ -71,7 +71,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton(text="💻 Информатика ЕГЭ")],
         [KeyboardButton(text="📐 Математика ОГЭ")],
         [KeyboardButton(text="🖥 Информатика ОГЭ")],
-        [KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Помощь")],
     ],
     resize_keyboard=True,
 )
