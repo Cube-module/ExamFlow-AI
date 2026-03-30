@@ -2,6 +2,7 @@ import logging
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
+from services.llm_interface import llm_service
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 from database import async_session, get_or_create_user
@@ -139,6 +140,17 @@ async def course_handler(message: Message):
         logger.info("User %s selected course: %s", message.from_user.id, message.text)
 
     await message.answer(COURSES[message.text])
+
+
+@router.message(Command("ask"))
+async def ask_handler(message: Message):
+    question = message.text.removeprefix("/ask").strip()
+    if not question:
+        await message.answer("Напиши вопрос после команды, например:\n/ask Что такое дискриминант?")
+        return
+    await message.answer("⏳ Думаю...")
+    answer = await llm_service.explain_topic(topic="общая тема", user_question=question)
+    await message.answer(f"💡 {answer}")
 
 
 @router.message(StateFilter(None))

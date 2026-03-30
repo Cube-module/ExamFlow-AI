@@ -2,6 +2,10 @@ import asyncio
 import logging
 import os
 
+from dotenv import load_dotenv
+from pathlib import Path
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from aiogram import Bot, Dispatcher
 
 from database import init_db
@@ -17,6 +21,9 @@ dp.include_router(start.router)
 
 async def main():
     logging.basicConfig(level=logging.INFO)
+
+    from services.llm_interface import llm_service
+    logging.info("LLM сервис: %s", llm_service.__class__.__name__)
 
     if not TOKEN:
         logging.error("Не найден BOT_TOKEN в переменных окружения")
