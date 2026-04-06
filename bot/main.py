@@ -37,7 +37,7 @@ async def main():
     bot = Bot(token=TOKEN)
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_streak_reminders, "interval", hours=1, args=[bot])
+    scheduler.add_job(send_streak_reminders, "cron", hour=19, minute=0, args=[bot])
     scheduler.start()
     logging.info("Планировщик напоминаний запущен")
 
