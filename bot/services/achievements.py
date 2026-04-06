@@ -1,6 +1,11 @@
+import json
+from pathlib import Path
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, UserAchievement
+
+COURSES_JSON_PATH = Path(__file__).parent.parent / "data" / "courses.json"
 
 # Каталог всех достижений: id -> отображаемые данные
 ACHIEVEMENTS: dict[str, dict] = {
@@ -15,6 +20,14 @@ ACHIEVEMENTS: dict[str, dict] = {
     # Качество
     "perfect_score":   {"emoji": "⭐", "title": "Идеальный результат", "desc": "Задача решена с первой попытки"},
 }
+
+
+def _load_courses() -> dict:
+    try:
+        with open(COURSES_JSON_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 def _already_has(user: User, achievement_id: str) -> bool:
@@ -35,6 +48,7 @@ async def check_and_award(session: AsyncSession, user: User) -> list[str]:
         await award("streak_3")
     if user.streak_count >= 7:
         await award("streak_7")
+        user.freeze_available = True
     if user.streak_count >= 30:
         await award("streak_30")
 
@@ -44,17 +58,29 @@ async def check_and_award(session: AsyncSession, user: User) -> list[str]:
     if completed:
         await award("first_lesson")
 
-    # Модуль пройден: все уроки из одного course_id+module завершены — упрощённо:
-    # если завершено >= 2 урока в одном курсе считаем модуль пройденным
-    from collections import Counter
-    course_counts = Counter(p.course_id for p in completed if p.course_id)
-    if any(count >= 2 for count in course_counts.values()):
-        await award("first_module")
+    # Множество пройденных lesson_id по каждому курсу
+    completed_by_course: dict[str, set[str]] = {}
+    for p in completed:
+        if p.course_id:
+            completed_by_course.setdefault(p.course_id, set()).add(p.lesson_id)
 
-    # Курс завершён: проверяем через общее кол-во уроков — заглушка,
-    # реальная проверка будет после подключения контента
-    if any(count >= 4 for count in course_counts.values()):
-        await award("course_complete")
+    # Проверка модулей и курса по реальной структуре courses.json
+    courses_data = _load_courses()
+    if courses_data:
+        course_id = courses_data.get("course_id")
+        modules = courses_data.get("modules", [])
+        completed_ids = completed_by_course.get(course_id, set())
+
+        all_modules_done = True
+        for module in modules:
+            module_lesson_ids = {lesson["lesson_id"] for lesson in module.get("lessons", [])}
+            if module_lesson_ids and module_lesson_ids.issubset(completed_ids):
+                await award("first_module")
+            else:
+                all_modules_done = False
+
+        if modules and all_modules_done:
+            await award("course_complete")
 
     if awarded:
         await session.commit()
