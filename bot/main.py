@@ -7,9 +7,11 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from aiogram import Bot, Dispatcher
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from database import init_db
 from handlers import lessons, profile, start
+from services.reminder_service import send_streak_reminders
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -33,9 +35,16 @@ async def main():
     logging.info("База данных инициализирована")
 
     bot = Bot(token=TOKEN)
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(send_streak_reminders, "interval", hours=1, args=[bot])
+    scheduler.start()
+    logging.info("Планировщик напоминаний запущен")
+
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        scheduler.shutdown()
         await bot.session.close()
 
 

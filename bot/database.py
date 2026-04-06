@@ -27,6 +27,7 @@ class User(Base):
     streak_count = Column(Integer, default=0)
     last_activity_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     freeze_available = Column(Boolean, default=False)
+    last_reminder_date = Column(DateTime, nullable=True)
 
     progress = relationship("UserProgress", back_populates="user")
     achievements = relationship("UserAchievement", back_populates="user")
@@ -60,6 +61,14 @@ class UserAchievement(Base):
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Миграция: добавить колонки, которых может не быть в старой БД
+        for column_sql in [
+            "ALTER TABLE users ADD COLUMN last_reminder_date DATETIME",
+        ]:
+            try:
+                await conn.exec_driver_sql(column_sql)
+            except Exception:
+                pass  # колонка уже существует
 
 
 async def get_user_profile(session: AsyncSession, telegram_id: int) -> User | None:
