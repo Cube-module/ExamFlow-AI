@@ -13,7 +13,9 @@ from database import init_db
 from handlers import lessons, profile, start
 from services.reminder_service import send_streak_reminders
 
-TOKEN = os.getenv("BOT_TOKEN")
+# Теперь можно читать
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 dp = Dispatcher()
 dp.include_router(profile.router)

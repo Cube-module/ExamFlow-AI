@@ -58,6 +58,18 @@ class UserAchievement(Base):
     user = relationship("User", back_populates="achievements")
 
 
+# bot/database.py
+async def save_user_progress(user_id: int, lesson_id: str, status: str, score: int):
+    async with SessionLocal() as session:
+        progress = await session.get(UserProgress, {"user_id": user_id, "lesson_id": lesson_id})
+        if not progress:
+            progress = UserProgress(user_id=user_id, lesson_id=lesson_id)
+        progress.status = status
+        progress.score = score
+        progress.completed_at = datetime.utcnow() if status == "completed" else None
+        session.add(progress)
+        await session.commit()
+
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
