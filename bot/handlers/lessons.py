@@ -5,6 +5,8 @@ from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart, Command, StateFilter 
+
 
 from database import async_session, get_or_create_user, UserProgress
 from services.llm_interface import llm_service
@@ -50,7 +52,7 @@ async def show_lesson(callback: types.CallbackQuery):
         ],
     ])
     
-    # 🔥 Кнопка видео (если есть ресурсы)
+    # Кнопка видео (если есть ресурсы)
     if lesson.get("video_resources"):
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(text="🎥 Видео по теме", callback_data=f"videos_{lesson_id}")
@@ -67,32 +69,100 @@ async def show_lesson(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("next_lesson_"))
 async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
     """ [EF-003] Переход к следующему уроку + сохранение прогресса"""
+    from html import escape
+    from sqlalchemy import select
+    
     current_lesson_id = callback.data.removeprefix("next_lesson_")
     await state.clear()
     
-    # 1. Сохраняем прогресс: текущий урок = completed
+    # Получаем информацию о текущем уроке, чтобы узнать course_id
+    current_lesson = course_service.get_lesson(current_lesson_id)
+    course_id = current_lesson.get("course_id") if current_lesson else None
+    
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         
-        # Ищем или создаём запись прогресса
-        progress = await session.get(UserProgress, (user.id, current_lesson_id))
+        # Сохраняем прогресс
+        stmt = select(UserProgress).where(
+            UserProgress.user_id == user.id,
+            UserProgress.lesson_id == current_lesson_id
+        )
+        result = await session.execute(stmt)
+        progress = result.scalar_one_or_none()
+        
         if not progress:
             progress = UserProgress(
                 user_id=user.id,
                 lesson_id=current_lesson_id,
-                status="in_progress"
+                course_id=course_id  # Сохраняем course_id!
             )
             session.add(progress)
+        else:
+            progress.course_id = course_id  # Обновляем, если нужно
         
-        # Обновляем статус
         progress.status = "completed"
         progress.score = max(progress.score or 0, 10)
         progress.completed_at = datetime.utcnow()
         
-        await session.commit()
+        # Находим следующий урок
+        next_lesson_id = course_service.get_next_lesson_id(current_lesson_id)
+        user.current_lesson_id = next_lesson_id
         
-        # Обновляем стрик (геймификация)
+        await session.commit()
         await update_streak(session, user)
+    
+    # Проверяем, есть ли следующий урок
+    if not next_lesson_id:
+        await callback.message.edit_text(
+            "🎉 <b>Поздравляем! Курс завершён!</b>\n\n"
+            "Ты прошёл все уроки. Теперь можешь:\n"
+            "• Повторить сложные темы в профиле\n"
+            "• Пройти курс заново для закрепления",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Мой прогресс", callback_data="profile")],
+                [InlineKeyboardButton(text="🔄 Начать сначала", callback_data="course_restart")]
+            ]),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+    
+    # Загружаем следующий урок
+    lesson = course_service.get_lesson(next_lesson_id)
+    if not lesson:
+        await callback.answer("❌ Следующий урок не найден", show_alert=True)
+        return
+    
+    # ЭКРАНИРУЕМ все поля перед вставкой в HTML!
+    text = f"📚 <b>{escape(lesson['title'])}</b>\n"
+    text += f"<i>Модуль: {escape(lesson['module_title'])}</i>\n\n"
+    text += escape(lesson["content"])
+    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{escape(lesson['summary'])}"
+    
+    # Кнопки
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Понял, дальше", callback_data=f"next_lesson_{next_lesson_id}"),
+            InlineKeyboardButton(text="❓ Не понял", callback_data=f"ask_ai_{next_lesson_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📝 Хочу практику", callback_data=f"practice_{next_lesson_id}"),
+        ],
+    ])
+    
+    # Кнопка видео (если есть)
+    if lesson.get("video_resources"):
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text="🎥 Видео по теме", callback_data=f"videos_{next_lesson_id}")
+        ])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
     
     # 2. Находим следующий урок
     next_lesson_id = course_service.get_next_lesson_id(current_lesson_id)
@@ -223,6 +293,36 @@ async def send_task(message: types.Message, task: dict, state: FSMContext) -> No
 @router.message(LessonState.answering)
 async def check_answer(message: types.Message, state: FSMContext):
     """Проверяет ответ пользователя и даёт обратную связь"""
+    # ПРОВЕРКА НА КОМАНДЫ — ДОБАВЬ ЭТО В НАЧАЛО
+    if message.text.startswith("/"):
+        if message.text == "/start":
+            await state.clear()  # Сбрасываем состояние!
+            # Перенаправляем на start
+            from handlers.start import cmd_start
+            await cmd_start(message)
+            return
+        elif message.text == "/profile":
+            await state.clear()  # Сбрасываем состояние!
+            # Перенаправляем на profile
+            from handlers.profile import profile_handler
+            await profile_handler(message)
+            return
+        elif message.text == "/help":
+            await message.answer(HELP_TEXT)
+            return
+        else:
+            await message.answer(
+                "⚠️ В режиме решения задач доступны только:\n"
+                "• Ответы на задачу\n"
+                "• /start — выйти в меню\n"
+                "• /profile — посмотреть прогресс\n"
+                "• /help — справка"
+            )
+            return
+    # КОНЕЦ ПРОВЕРКИ
+
+    data = await state.get_data()
+    task = data.get("current_solution_task")
     data = await state.get_data()
     task = data.get("current_solution_task")
     
@@ -257,6 +357,21 @@ async def check_answer(message: types.Message, state: FSMContext):
             f"💡 Подсказка: {task.get('hint', 'Попробуй ещё раз')}\n"
             f"Попробуй ещё раз:"
         )
+
+
+@router.message(Command("cancel"))
+@router.message(F.text == "❌ Отменить")
+async def cancel_handler(message: types.Message, state: FSMContext):
+    """Сбросить текущее состояние"""
+    await state.clear()
+    await message.answer(
+        "✅ Режим задачи сброшен.\n\n"
+        "Выбери действие:\n"
+        "/start — главное меню\n"
+        "/profile — мой прогресс"
+    )
+
+
 
 
 @router.callback_query(F.data.startswith("videos_"))

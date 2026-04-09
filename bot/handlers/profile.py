@@ -5,17 +5,25 @@ from pathlib import Path
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
-
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import types
 from database import async_session, get_user_profile
 from services.achievements import ACHIEVEMENTS
+from services.course_service import CourseService  #  Новый импорт
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+course_service = CourseService()  #  Инициализируем сервис
 
 COURSES_JSON_PATH = Path(__file__).parent.parent / "data" / "courses.json"
 
+@router.callback_query(F.data == "profile")
+async def profile_callback(callback: types.CallbackQuery):
+    """Обработчик кнопки 'Мой прогресс'"""
+    # Перенаправляем на основной хендлер
+    await profile_handler(callback.message)
+    await callback.answer()
 
 def _load_courses_index() -> dict[str, dict]:
     """Возвращает {course_id: {total_lessons, modules: {module_id: {title, lesson_ids}}}}."""
@@ -26,17 +34,36 @@ def _load_courses_index() -> dict[str, dict]:
         return {}
 
     index = {}
-    course_id = data["course_id"]
-    modules = {}
-    total = 0
-    for module in data.get("modules", []):
-        lesson_ids = [l["lesson_id"] for l in module.get("lessons", [])]
-        modules[module["module_id"]] = {
-            "title": module["title"],
-            "lesson_ids": lesson_ids,
+    
+    # Проверяем формат JSON: новый (с массивом courses) или старый
+    if "courses" in data:
+        # Новый формат: несколько курсов
+        courses_list = data["courses"]
+    else:
+        # Старый формат: один курс
+        courses_list = [data]
+    
+    for course in courses_list:
+        course_id = course.get("course_id")
+        if not course_id:
+            continue
+            
+        modules = {}
+        total = 0
+        for module in course.get("modules", []):
+            lesson_ids = [l["lesson_id"] for l in module.get("lessons", [])]
+            modules[module["module_id"]] = {
+                "title": module["title"],
+                "lesson_ids": lesson_ids,
+            }
+            total += len(lesson_ids)
+        
+        index[course_id] = {
+            "title": course.get("title", "Без названия"),
+            "total_lessons": total,
+            "modules": modules
         }
-        total += len(lesson_ids)
-    index[course_id] = {"title": data["title"], "total_lessons": total, "modules": modules}
+    
     return index
 
 
@@ -71,6 +98,24 @@ async def profile_handler(message: Message):
     # --- Серия дней ---
     streak_line = _streak_bar(user.streak_count)
     freeze_line = "❄️ Заморозка: доступна" if user.freeze_available else ""
+
+    # --- 🔥 Текущий урок (для быстрого продолжения) ---
+    continue_section = []
+    continue_keyboard = None
+    
+    if user.current_lesson_id:
+        lesson = course_service.get_lesson(user.current_lesson_id)
+        if lesson:
+            continue_section = [
+                f"",
+                f"📍 <b>Следующий урок:</b> {lesson['title']}",
+                f"<i>Модуль: {lesson['module_title']}</i>",
+                f"Нажми кнопку ниже, чтобы продолжить:",
+            ]
+            continue_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="▶️ Продолжить обучение", 
+                                     callback_data=f"lesson_{user.current_lesson_id}")]
+            ])
 
     # --- Прогресс по курсам ---
     completed_ids: set[str] = {
@@ -121,6 +166,9 @@ async def profile_handler(message: Message):
     ]
     if freeze_line:
         lines.append(freeze_line)
+    
+    # 🔥 Добавляем секцию текущего урока
+    lines.extend(continue_section)
 
     lines += [
         f"",
@@ -128,6 +176,13 @@ async def profile_handler(message: Message):
     ] + progress_lines + [
         f"",
         f"🏅 <b>Достижения ({earned_count}/{total_count}):</b>",
-    ] + achievement_lines
+    ] + achievement_lines + [
+        f"",
+        f"💡 <b>Команды:</b> /continue — продолжить, /help — справка"
+    ]
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=continue_keyboard,  # Кнопка продолжения (если есть урок)
+        parse_mode="HTML"
+    )

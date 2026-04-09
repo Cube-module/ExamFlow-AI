@@ -1,95 +1,63 @@
 import logging
-
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from services.llm_interface import llm_service
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-
+from services.course_service import CourseService
 from database import async_session, get_or_create_user
+from aiogram import types
 
 logger = logging.getLogger(__name__)
-
 router = Router()
+course_service = CourseService()
 
-COURSES = {
-    "📊 Математика ЕГЭ (Профиль)": """
-📊 Математика ЕГЭ (Профильный уровень)
 
-Курс включает:
-• Алгебра и начала анализа
-• Геометрия (планиметрия и стереометрия)
-• Уравнения и неравенства
-• Функции и графики
-• Задачи с параметрами
+def build_main_keyboard(courses: list) -> ReplyKeyboardMarkup:
+    """Строит обычную клавиатуру из списка курсов"""
+    keyboard = []
+    for course in courses:
+        title = course.get("title", course.get("course_id", "Курс"))
+        keyboard.append([KeyboardButton(text=f"🚀 {title}")])
+    keyboard.append([KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Помощь")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-Статус: В разработке 🚧
-Скоро здесь появятся уроки и практические задания!
-""",
-    "💻 Информатика ЕГЭ": """
-💻 Информатика ЕГЭ
 
-Курс включает:
-• Системы счисления
-• Алгоритмизация и программирование
-• Логика и комбинаторика
-• Информационные модели
-• Работа с файлами и базами данных
+def build_inline_course_keyboard(courses: list) -> InlineKeyboardMarkup:
+    """Строит inline-клавиатуру для выбора курса"""
+    keyboard = []
+    for course in courses:
+        course_id = course.get("course_id")
+        title = course.get("title", course.get("course_id", "Курс"))
+        keyboard.append([
+            InlineKeyboardButton(text=f"🚀 {title}", callback_data=f"course_{course_id}")
+        ])
+    keyboard.append([
+        InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+        InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help_inline")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-Статус: В разработке 🚧
-Скоро здесь появятся уроки и практические задания!
-""",
-    "📐 Математика ОГЭ": """
-📐 Математика ОГЭ
-
-Курс включает:
-• Арифметика и алгебра
-• Геометрия на плоскости
-• Функции и графики
-• Текстовые задачи
-• Вероятность и статистика
-
-Статус: В разработке 🚧
-Скоро здесь появятся уроки и практические задания!
-""",
-    "🖥 Информатика ОГЭ": """
-🖥 Информатика ОГЭ
-
-Курс включает:
-• Основы алгоритмизации
-• Системы счисления (базовый уровень)
-• Работа с электронными таблицами
-• Логические выражения
-• Основы программирования
-
-Статус: В разработке 🚧
-Скоро здесь появятся уроки и практические задания!
-""",
-}
-
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📊 Математика ЕГЭ (Профиль)")],
-        [KeyboardButton(text="💻 Информатика ЕГЭ")],
-        [KeyboardButton(text="📐 Математика ОГЭ")],
-        [KeyboardButton(text="🖥 Информатика ОГЭ")],
-        [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="ℹ️ Помощь")],
-    ],
-    resize_keyboard=True,
-)
 
 HELP_TEXT = """
-📚 Доступные команды:
+📚 **Быстрая справка:**
 
-/start - Начать работу с ботом и выбрать курс
-/help - Показать эту справку
+**🎓 Обучение:**
+/start — Главное меню и выбор курса
+/continue — Продолжить с последнего урока 📍
+/profile — Твой прогресс и статистика 🔥
 
-🎓 Как работать с ботом:
-1. Выбери курс из предложенных кнопок
-2. Проходи уроки последовательно
-3. Решай задачи для закрепления материала
-4. Поддерживай серию дней для мотивации
+**❓ Помощь:**
+/help — Эта справка
+/ask <вопрос> — Спросить ИИ-репетитора 🤖
 
-Удачи в обучении!
+**💡 Как учиться:**
+1. Выбери курс в меню
+2. Читай теорию и смотри видео
+3. Решай задачи (вводи ответ числом)
+4. Поддерживай серию дней! 🔥
+
+**Застрял?**
+Нажми «❓ Не понял» под уроком — ИИ объяснит тему.
 """
 
 
@@ -104,42 +72,197 @@ async def start(message: Message):
         is_new = user.selected_course is None
         logger.info("User %s: %s", message.from_user.id, "registered" if is_new else "returned")
 
+    # 🔥 Загружаем курсы из courses.json
+    courses = course_service.get_all_courses()
+    
     welcome_text = f"""
-Привет, {message.from_user.first_name}!
+Привет, {message.from_user.first_name}! 👋
 
 Я ExamFlow-AI – твой персональный помощник для подготовки к экзаменам!
 
 Что я умею:
-• Провожу тебя через структурированные курсы по подготовке к экзаменам
-• Объясняю сложные темы простым языком
-• Генерирую практические задачи для закрепления материала
-• Помогаю поддерживать дисциплину через систему достижений и серий дней
-
-Система мотивации:
-• Серия дней – занимайся регулярно и не теряй прогресс!
-• Достижения – получай бейджи за успехи
-• Персональная статистика – отслеживай свой рост
+• 📚 Провожу через структурированные курсы
+• 🤖 Объясняю сложные темы простым языком
+• ✏️ Генерирую практические задачи
+• 🔥 Помогаю поддерживать дисциплину (серии, ачивки)
 
 Выбери курс, чтобы начать обучение:
 """
-    await message.answer(welcome_text, reply_markup=MAIN_KEYBOARD)
+    # Используем inline-клавиатуру для удобной навигации
+    await message.answer(welcome_text, reply_markup=build_inline_course_keyboard(courses))
 
 
 @router.message(Command("help"))
 @router.message(F.text == "ℹ️ Помощь")
-async def help_handler(message: Message):
-    await message.answer(HELP_TEXT)
+async def help_message_handler(message: Message):
+    """Обработчик справки для текстовых команд"""
+    await message.answer(HELP_TEXT, parse_mode="Markdown")
+
+@router.callback_query(F.data == "help_inline")
+async def help_callback_handler(callback: types.CallbackQuery):
+    """Обработчик справки для inline-кнопки"""
+    await callback.message.answer(HELP_TEXT, parse_mode="Markdown")
+    await callback.answer()  # Просто закрываем "часики" на кнопке
 
 
-@router.message(F.text.in_(COURSES))
-async def course_handler(message: Message):
+@router.callback_query(F.data.startswith("course_"))
+async def show_course_modules(callback):
+    """ Показывает модули выбранного курса"""
+    from html import escape
+    course_id = callback.data.removeprefix("course_")
+    course = course_service.get_course_by_id(course_id)
+    
+    if not course:
+        await callback.answer("❌ Курс не найден", show_alert=True)
+        return
+    
+    # Сохраняем выбранный курс в БД (для совместимости)
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        user.selected_course = course.get("title", course_id)
+        await session.commit()
+    
+    text = f"📚 <b>{escape(course['title'])}</b>\n\n"
+    text += f"{escape(course.get('description', ''))}\n\n"
+    text += f"📦 <b>Модули:</b>\n\n"
+    
+    keyboard = []
+    for i, module in enumerate(course.get("modules", []), 1):
+        module_id = module["module_id"]
+        title = module["title"]
+        lessons_count = len(module.get("lessons", []))
+        text += f"{i}. {escape(title)} ({lessons_count} уроков)\n"
+        keyboard.append([
+            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course_id}:{module_id}")
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton(text="↩ Назад к курсам", callback_data="start_inline")
+    ])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("module_"))
+async def show_module_lessons(callback):
+    """Показывает уроки выбранного модуля"""
+    from html import escape
+    
+    #  Парсим ТОЛЬКО формат с двоеточием
+    # Ожидаем: module_math_ege_basic:mod_theory
+    data = callback.data.removeprefix("module_")
+    
+    if ":" not in data:
+        #  Логирование для отладки
+        logger.error(f"Invalid callback format (expected ':'): {callback.data}")
+        await callback.answer("❌ Ошибка формата кнопки", show_alert=True)
+        return
+    
+    course_id, module_id = data.split(":", 1)
+    
+    #  Отладочный лог (раскомментируй, чтобы видеть в консоли)
+    # logger.info(f"Parsed: course={course_id}, module={module_id}")
+    
+    module = course_service.get_module(course_id, module_id)
+    if not module:
+        logger.error(f"Module not found: course={course_id}, module={module_id}")
+        await callback.answer("❌ Модуль не найден", show_alert=True)
+        return
+    
+    text = f"📖 <b>{module['title']}</b>\n\n"
+    
+    keyboard = []
+    for i, lesson in enumerate(module.get("lessons", []), 1):
+        lesson_id = lesson["lesson_id"]
+        title = lesson["title"]
+        summary = lesson.get("summary", "")
+        # Экранируем summary И обрезаем безопасно
+        if summary:
+            summary = escape(summary)
+            if len(summary) > 60:
+                summary = summary[:57] + "..."
+            text += f"{i}. <b>{title}</b>\n   <i>{summary}</i>\n\n"
+        else:
+            text += f"{i}. <b>{title}</b>\n\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(text=f"📝 {escape(lesson['title'])}", callback_data=f"lesson_{lesson_id}")
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton(text="↩ Назад к модулям", callback_data=f"course_{course_id}")
+    ])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "start_inline")
+async def back_to_courses_inline(callback):
+    """Возврат к списку курсов (inline-версия)"""
+    courses = course_service.get_all_courses()
+    text = "👋 <b>Выбери курс для обучения:</b>"
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_inline_course_keyboard(courses),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# 🔥 Оставляем поддержку старых кнопок (для совместимости)
+@router.message(F.text.startswith("🚀 "))
+async def course_selected_by_text(message: Message):
+    """Обработчик выбора курса через текстовую кнопку (старый формат)"""
+    course_name = message.text.removeprefix("🚀 ").strip()
+    
+    # Ищем курс по названию в JSON
+    courses = course_service.get_all_courses()
+    course = next((c for c in courses if c.get("title") == course_name), None)
+    
+    if not course:
+        await message.answer(f"❌ Курс «{course_name}» не найден. Попробуй /start")
+        return
+    
+    # Сохраняем выбор в БД
     async with async_session() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-        user.selected_course = message.text
+        user.selected_course = course_name
         await session.commit()
-        logger.info("User %s selected course: %s", message.from_user.id, message.text)
-
-    await message.answer(COURSES[message.text])
+    
+    # Показываем модули курса
+    text = f"📚 <b>{course['title']}</b>\n\n"
+    text += f"{course.get('description', '')}\n\n"
+    text += f"📦 <b>Модули:</b>\n\n"
+    
+    keyboard = []
+    for i, module in enumerate(course.get("modules", []), 1):
+        module_id = module["module_id"]
+        title = module["title"]
+        lessons_count = len(module.get("lessons", []))
+        text += f"{i}. {title} ({lessons_count} уроков)\n"
+        keyboard.append([
+            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course['course_id']}_{module_id}")
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton(text="↩ Назад к курсам", callback_data="start_inline")
+    ])
+    
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="HTML"
+    )
 
 
 @router.message(Command("ask"))
@@ -155,7 +278,28 @@ async def ask_handler(message: Message):
 
 @router.message(StateFilter(None))
 async def fallback_handler(message: Message):
+    courses = course_service.get_all_courses()
     await message.answer(
         "Не понял команду. Выбери курс из меню или напиши /help.",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=build_main_keyboard(courses)
     )
+
+
+@router.message(Command("continue"))
+async def continue_learning(message: Message):
+    """Продолжить с последнего урока"""
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+    
+    if not user.current_lesson_id:
+        await message.answer("📚 Ты ещё не начал обучение. Выбери курс в /start")
+        return
+    
+    lesson = course_service.get_lesson(user.current_lesson_id)
+    if not lesson:
+        await message.answer("⚠️ Урок не найден. Начни заново: /start")
+        return
+    
+    # Показываем урок (код как в show_lesson)
+    text = f"📚 <b>{lesson['title']}</b>\n..."
+    await message.answer(text, parse_mode="HTML")
