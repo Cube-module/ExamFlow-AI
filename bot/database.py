@@ -17,18 +17,19 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(String, unique=True, nullable=False)
+    telegram_id = Column(String, unique=True)
     username = Column(String)
-    selected_course = Column(String, nullable=True)
-
+    
     # Геймификация
     streak_count = Column(Integer, default=0)
-    last_activity_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_activity_date = Column(DateTime, default=datetime.utcnow)
     freeze_available = Column(Boolean, default=False)
-    last_reminder_date = Column(DateTime, nullable=True)
-
+    
+    # Прогресс курса
+    selected_course = Column(String, nullable=True)
+    current_lesson_id = Column(String, nullable=True)  # ← Добавь это
+    
     progress = relationship("UserProgress", back_populates="user")
     achievements = relationship("UserAchievement", back_populates="user")
 
@@ -38,11 +39,11 @@ class UserProgress(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    course_id = Column(String)
     lesson_id = Column(String)
     status = Column(String)  # 'locked', 'in_progress', 'completed'
     score = Column(Integer, default=0)
     completed_at = Column(DateTime, nullable=True)
+    course_id = Column(String, nullable=True)  # Если нужно
 
     user = relationship("User", back_populates="progress")
 
@@ -83,11 +84,18 @@ async def init_db() -> None:
                 pass  # колонка уже существует
 
 
-async def get_user_profile(session: AsyncSession, telegram_id: int) -> User | None:
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload  # Импортируем
+
+async def get_user_profile(session, telegram_id: int):
+    """Получает пользователя с прогрессом и достижениями"""
     result = await session.execute(
         select(User)
-        .where(User.telegram_id == str(telegram_id))
-        .options(selectinload(User.progress), selectinload(User.achievements))
+        .where(User.telegram_id == str(telegram_id))  # Преобразуем в строку
+        .options(
+            selectinload(User.progress),      # Загружаем прогресс
+            selectinload(User.achievements)   # Загружаем достижения
+        )
     )
     return result.scalar_one_or_none()
 

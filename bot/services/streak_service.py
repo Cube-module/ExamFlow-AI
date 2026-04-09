@@ -1,42 +1,67 @@
-from datetime import datetime, timezone
-
+from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from database import User
-from services.achievements import check_and_award
 
-
-async def update_streak(session: AsyncSession, user: User) -> None:
-    """Вызывать при любом полезном действии (урок, задача)."""
-    now = datetime.now(timezone.utc)
-    last_activity = user.last_activity_date
-
-    if last_activity is None:
-        user.streak_count = 1
+async def update_streak(session: AsyncSession, user: User):
+    """
+    Обновляет серию дней при активности пользователя.
+    Вызывать после каждого завершённого урока/задачи.
+    """
+    now = datetime.utcnow()
+    last_activity = user.last_activity_date or now
+    
+    # Разница в днях
+    delta_days = (now.date() - last_activity.date()).days
+    
+    if delta_days == 0:
+        # Сегодня уже занимались — просто обновляем время
         user.last_activity_date = now
-        await session.commit()
-        return
-
-    # Приводим last_activity к aware datetime, если хранится naive
-    if last_activity.tzinfo is None:
-        last_activity = last_activity.replace(tzinfo=timezone.utc)
-
-    delta = now.date() - last_activity.date()
-
-    if delta.days == 0:
-        # Уже занимались сегодня — просто обновляем время
-        user.last_activity_date = now
-    elif delta.days == 1:
-        # Новый день подряд
+    elif delta_days == 1:
+        # Новый день подряд — увеличиваем серию
         user.streak_count += 1
         user.last_activity_date = now
     else:
         # Пропуск >= 2 дней
         if user.freeze_available:
-            user.freeze_available = False  # тратим заморозку, стрик сохраняется
+            # Тратим заморозку
+            user.freeze_available = False
+            user.streak_count += 1
+            user.last_activity_date = now
+            # Можно отправить уведомление: "Заморозка спасла твою серию!"
         else:
-            user.streak_count = 0  # стрик сгорает
-        user.last_activity_date = now
-
+            # Сгорание серии
+            user.streak_count = 0
+            user.last_activity_date = now
+            # Можно отправить уведомление: "Серия сгорела! Начинай заново!"
+    
     await session.commit()
-    await check_and_award(session, user)
+
+
+async def check_streak_loss(session: AsyncSession, user: User) -> bool:
+    """
+    Проверка: потерял ли пользователь серию за вчерашний день.
+    Вызывать планировщиком раз в сутки.
+    Возвращает True, если серия сгорела.
+    """
+    now = datetime.utcnow()
+    last_activity = user.last_activity_date or now
+    delta_days = (now.date() - last_activity.date()).days
+    
+    if delta_days >= 2:
+        if user.freeze_available:
+            user.freeze_available = False
+            user.streak_count = 0
+        else:
+            user.streak_count = 0
+        user.last_activity_date = now
+        await session.commit()
+        return True
+    
+    return False
+
+
+async def grant_freeze(session: AsyncSession, user: User, count: int = 1):
+    """Выдать пользователю заморозку серии"""
+    user.freeze_available = True
+    # Можно хранить несколько: user.freeze_count += count
+    await session.commit()

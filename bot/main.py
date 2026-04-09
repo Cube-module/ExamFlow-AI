@@ -22,6 +22,26 @@ dp.include_router(profile.router)
 dp.include_router(lessons.router)
 dp.include_router(start.router)
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from database import async_session, User
+from services.streak_service import check_streak_loss
+
+async def send_streak_reminders(bot):
+    """Ежедневная проверка серий (в 22:00)"""
+    async with async_session() as session:
+        users = await session.execute(select(User))
+        users = users.scalars().all()
+        
+        for user in users:
+            if user.streak_count > 0:
+                lost = await check_streak_loss(session, user)
+                if lost:
+                    await bot.send_message(
+                        user.telegram_id,
+                        "Твоя серия сгорела! Начни заниматься снова, чтобы не потерять прогресс."
+                    )
+
 
 async def main():
     logging.basicConfig(level=logging.INFO)

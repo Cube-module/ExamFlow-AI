@@ -1,7 +1,7 @@
 # bot/services/course_service.py
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 class CourseService:
     def __init__(self, courses_path: str = "bot/data/courses.json"):
@@ -15,17 +15,59 @@ class CourseService:
                 self._cache = json.load(f)
         return self._cache
     
+    def get_all_courses(self) -> List[dict]:
+        """Возвращает список всех курсов (для главного меню)"""
+        courses = self._load_courses()
+        # Если в JSON один курс — возвращаем его в списке
+        if "course_id" in courses:
+            return [courses]
+        
+        # Если несколько курсов (новый формат)
+        return courses.get("courses", [courses])
+    
+    def get_course_by_id(self, course_id: str) -> Optional[dict]:
+        """Находит курс по ID"""
+        courses = self._load_courses()
+        if courses.get("course_id") == course_id:
+            return courses
+        for course in courses.get("courses", []):
+            if course.get("course_id") == course_id:
+                return course
+        return None
+    
+    def get_module(self, course_id: str, module_id: str) -> Optional[dict]:
+        """Находит модуль по ID внутри курса"""
+        course = self.get_course_by_id(course_id)
+        if not course:
+            return None
+        for module in course.get("modules", []):
+            if module["module_id"] == module_id:
+                return module
+        return None
+    
     def get_lesson(self, lesson_id: str) -> Optional[dict]:
         """Находит урок по ID в любом модуле курса"""
         courses = self._load_courses()
-        for module in courses.get("modules", []):
-            for lesson in module.get("lessons", []):
-                if lesson["lesson_id"] == lesson_id:
-                    return {
-                        **lesson,
-                        "module_title": module["title"],  # Добавляем название модуля
-                        "course_id": courses["course_id"]
-                    }
+        # Если один курс в JSON
+        if "course_id" in courses:
+            for module in courses.get("modules", []):
+                for lesson in module.get("lessons", []):
+                    if lesson["lesson_id"] == lesson_id:
+                        return {
+                            **lesson,
+                            "module_title": module["title"],
+                            "course_id": courses["course_id"]
+                        }
+        # Если несколько курсов
+        for course in courses.get("courses", []):
+            for module in course.get("modules", []):
+                for lesson in module.get("lessons", []):
+                    if lesson["lesson_id"] == lesson_id:
+                        return {
+                            **lesson,
+                            "module_title": module["title"],
+                            "course_id": course["course_id"]
+                        }
         return None
     
     def get_lesson_topic(self, lesson_id: str) -> str:
@@ -33,34 +75,47 @@ class CourseService:
         lesson = self.get_lesson(lesson_id)
         if lesson:
             return f"{lesson['module_title']}: {lesson['title']}"
-        return lesson_id  # Фоллбэк
+        return lesson_id
     
     def get_next_lesson_id(self, current_lesson_id: str) -> Optional[str]:
         """Находит ID следующего урока или None, если курс завершён"""
         courses = self._load_courses()
         found_module = False
         
-        for module in courses.get("modules", []):
-            lessons = module.get("lessons", [])
-            
-            # Ищем текущий урок в этом модуле
-            for i, lesson in enumerate(lessons):
-                if lesson["lesson_id"] == current_lesson_id:
-                    # Есть ли следующий урок в этом модуле?
-                    if i + 1 < len(lessons):
-                        return lessons[i + 1]["lesson_id"]
-                    # Иначе ищем первый урок следующего модуля
-                    found_module = True
-                    break
-            
-            # Если нашли текущий урок в этом модуле и он был последним
-            if found_module:
-                # Ищем следующий модуль
-                module_idx = courses["modules"].index(module)
-                if module_idx + 1 < len(courses["modules"]):
-                    next_module = courses["modules"][module_idx + 1]
-                    if next_module.get("lessons"):
-                        return next_module["lessons"][0]["lesson_id"]
-                return None  # Курс завершён
+        # Если один курс в JSON
+        if "course_id" in courses:
+            for module in courses.get("modules", []):
+                lessons = module.get("lessons", [])
+                for i, lesson in enumerate(lessons):
+                    if lesson["lesson_id"] == current_lesson_id:
+                        if i + 1 < len(lessons):
+                            return lessons[i + 1]["lesson_id"]
+                        found_module = True
+                        break
+                if found_module:
+                    module_idx = courses["modules"].index(module)
+                    if module_idx + 1 < len(courses["modules"]):
+                        next_module = courses["modules"][module_idx + 1]
+                        if next_module.get("lessons"):
+                            return next_module["lessons"][0]["lesson_id"]
+                    return None
         
-        return None  # Урок не найден
+        # Если несколько курсов
+        for course in courses.get("courses", []):
+            for module in course.get("modules", []):
+                lessons = module.get("lessons", [])
+                for i, lesson in enumerate(lessons):
+                    if lesson["lesson_id"] == current_lesson_id:
+                        if i + 1 < len(lessons):
+                            return lessons[i + 1]["lesson_id"]
+                        found_module = True
+                        break
+                if found_module:
+                    module_idx = course["modules"].index(module)
+                    if module_idx + 1 < len(course["modules"]):
+                        next_module = course["modules"][module_idx + 1]
+                        if next_module.get("lessons"):
+                            return next_module["lessons"][0]["lesson_id"]
+                    return None
+        
+        return None
