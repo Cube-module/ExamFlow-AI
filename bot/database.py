@@ -77,6 +77,7 @@ async def init_db() -> None:
         # Миграция: добавить колонки, которых может не быть в старой БД
         for column_sql in [
             "ALTER TABLE users ADD COLUMN last_reminder_date DATETIME",
+            "ALTER TABLE users ADD COLUMN current_lesson_id VARCHAR",
         ]:
             try:
                 await conn.exec_driver_sql(column_sql)

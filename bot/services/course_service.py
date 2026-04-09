@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Optional, List
 
 class CourseService:
-    def __init__(self, courses_path: str = "bot/data/courses.json"):
+    def __init__(self, courses_path: str = None):
+        if courses_path is None:
+            courses_path = Path(__file__).parent.parent / "data" / "courses.json"
         self.courses_path = Path(courses_path)
         self._cache: Optional[dict] = None
     
