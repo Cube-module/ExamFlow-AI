@@ -229,26 +229,30 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
     # Получаем понятную тему для генерации задач
     topic = course_service.get_lesson_topic(lesson_id)
     
-    tasks = await llm_service.generate_tasks(topic=topic, count=3)
-    
+    tasks = await llm_service.generate_tasks(topic=topic, count=5)
+
     if not tasks:
         await callback.message.answer("⚠️ Не удалось загрузить задачи. Попробуй позже.")
         await callback.answer()
         return
-    
+
     await state.update_data(
         tasks=tasks,
         current_task=0,
+        correct_count=0,
         lesson_id=lesson_id,
-        topic=topic  # Сохраняем тему для отладки
+        topic=topic
     )
-    await send_task(callback.message, tasks[0], state)
+    await send_task(callback.message, tasks[0], state, task_num=1, total=len(tasks))
     await callback.answer()
 
 
-async def send_task(message: types.Message, task: dict, state: FSMContext) -> None:
+async def send_task(message: types.Message, task: dict, state: FSMContext, task_num: int = 1, total: int = 5) -> None:
     """Вспомогательная функция: отправляет задачу пользователю"""
-    await message.answer(f"📝 <b>Задача:</b>\n{task['question']}", parse_mode="HTML")
+    await message.answer(
+        f"📝 <b>Задача {task_num} из {total}</b>\n\n{task['question']}",
+        parse_mode="HTML"
+    )
     await state.set_state(LessonState.answering)
     await state.update_data(current_solution_task=task)
 
@@ -286,8 +290,6 @@ async def check_answer(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     task = data.get("current_solution_task")
-    data = await state.get_data()
-    task = data.get("current_solution_task")
     
     if task is None:
         await message.answer("⚠️ Сессия истекла. Начни урок заново.")
@@ -310,7 +312,14 @@ async def check_answer(message: types.Message, state: FSMContext):
         ))
         await session.commit()
 
+    tasks = data.get("tasks", [])
+    current_task_index = data.get("current_task", 0)
+    correct_count = data.get("correct_count", 0)
+    total = len(tasks)
+
     if is_correct:
+        correct_count += 1
+        await state.update_data(correct_count=correct_count)
         await message.answer(f"✅ {result['feedback']}")
 
         # Обновляем стрик и проверяем достижения
@@ -323,15 +332,26 @@ async def check_answer(message: types.Message, state: FSMContext):
         for ach_id in new_achievements:
             await message.answer(_achievement_text(ach_id), parse_mode="HTML")
 
-        # Переходим к следующей задаче
-        tasks = data.get("tasks", [])
-        current_task_index = data.get("current_task", 0) + 1
-
-        if current_task_index < len(tasks):
-            await state.update_data(current_task=current_task_index)
-            await send_task(message, tasks[current_task_index], state)
+        next_task_index = current_task_index + 1
+        if next_task_index < total:
+            await state.update_data(current_task=next_task_index)
+            await send_task(message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
         else:
-            await message.answer("🎉 Все задачи выполнены! Отличная работа!")
+            incorrect_count = total - correct_count
+            percent = round(correct_count / total * 100)
+            lesson_id = data.get("lesson_id", "")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")],
+                [InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")],
+            ])
+            await message.answer(
+                f"🎉 <b>Сессия завершена!</b>\n\n"
+                f"✅ Правильно: {correct_count}/{total}\n"
+                f"❌ Неправильно: {incorrect_count}/{total}\n"
+                f"🏆 Результат: {percent}%",
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
             await state.clear()
     else:
         await message.answer(
