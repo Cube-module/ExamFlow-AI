@@ -59,6 +59,19 @@ class UserAchievement(Base):
     user = relationship("User", back_populates="achievements")
 
 
+class TaskHistory(Base):
+    __tablename__ = "task_history"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    lesson_id = Column(String, nullable=True)
+    question = Column(String)
+    user_answer = Column(String)
+    is_correct = Column(Boolean)
+    score = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 # bot/database.py
 async def save_user_progress(user_id: int, lesson_id: str, status: str, score: int):
     async with SessionLocal() as session:

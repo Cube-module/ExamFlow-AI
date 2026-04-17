@@ -4,7 +4,8 @@ from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from services.llm_interface import llm_service
 from services.course_service import CourseService
-from database import async_session, get_or_create_user
+from sqlalchemy import select
+from database import async_session, get_or_create_user, User, UserProgress
 from aiogram import types
 
 logger = logging.getLogger(__name__)
@@ -150,60 +151,94 @@ async def show_course_modules(callback):
 
 @router.callback_query(F.data.startswith("module_"))
 async def show_module_lessons(callback):
-    """Показывает уроки выбранного модуля"""
+    """Показывает уроки модуля со статусами прогресса (✅/▶️/🔒)"""
     from html import escape
-    
-    #  Парсим ТОЛЬКО формат с двоеточием
-    # Ожидаем: module_math_ege_basic:mod_theory
+
     data = callback.data.removeprefix("module_")
-    
     if ":" not in data:
-        #  Логирование для отладки
         logger.error(f"Invalid callback format (expected ':'): {callback.data}")
         await callback.answer("❌ Ошибка формата кнопки", show_alert=True)
         return
-    
+
     course_id, module_id = data.split(":", 1)
-    
-    #  Отладочный лог (раскомментируй, чтобы видеть в консоли)
-    # logger.info(f"Parsed: course={course_id}, module={module_id}")
-    
     module = course_service.get_module(course_id, module_id)
     if not module:
         logger.error(f"Module not found: course={course_id}, module={module_id}")
         await callback.answer("❌ Модуль не найден", show_alert=True)
         return
-    
-    text = f"📖 <b>{module['title']}</b>\n\n"
-    
+
+    # Плоский список всех lesson_id курса по порядку (для определения доступности)
+    course = course_service.get_course_by_id(course_id)
+    all_lesson_ids = [
+        lesson["lesson_id"]
+        for mod in course.get("modules", [])
+        for lesson in mod.get("lessons", [])
+    ]
+
+    # Получаем завершённые уроки пользователя
+    async with async_session() as session:
+        user_subq = select(User.id).where(User.telegram_id == str(callback.from_user.id)).scalar_subquery()
+        result = await session.execute(
+            select(UserProgress.lesson_id).where(
+                UserProgress.user_id == user_subq,
+                UserProgress.status == "completed"
+            )
+        )
+        completed = {row for row in result.scalars()}
+
+    def get_status(lesson_id: str) -> str:
+        if lesson_id in completed:
+            return "completed"
+        idx = all_lesson_ids.index(lesson_id) if lesson_id in all_lesson_ids else -1
+        if idx == 0 or (idx > 0 and all_lesson_ids[idx - 1] in completed):
+            return "available"
+        return "locked"
+
+    STATUS_ICON = {"completed": "✅", "available": "▶️", "locked": "🔒"}
+
+    text = f"📖 <b>{escape(module['title'])}</b>\n\n"
     keyboard = []
+
     for i, lesson in enumerate(module.get("lessons", []), 1):
         lesson_id = lesson["lesson_id"]
         title = lesson["title"]
+        status = get_status(lesson_id)
+        icon = STATUS_ICON[status]
+
         summary = lesson.get("summary", "")
-        # Экранируем summary И обрезаем безопасно
         if summary:
-            summary = escape(summary)
-            if len(summary) > 60:
-                summary = summary[:57] + "..."
-            text += f"{i}. <b>{title}</b>\n   <i>{summary}</i>\n\n"
+            short = escape(summary)
+            if len(short) > 60:
+                short = short[:57] + "..."
+            text += f"{i}. {icon} <b>{escape(title)}</b>\n   <i>{short}</i>\n\n"
         else:
-            text += f"{i}. <b>{title}</b>\n\n"
-        
+            text += f"{i}. {icon} <b>{escape(title)}</b>\n\n"
+
+        if status == "locked":
+            cb_data = f"locked_{lesson_id}"
+        else:
+            cb_data = f"lesson_{lesson_id}"
+
         keyboard.append([
-            InlineKeyboardButton(text=f"📝 {escape(lesson['title'])}", callback_data=f"lesson_{lesson_id}")
+            InlineKeyboardButton(text=f"{icon} {escape(title)}", callback_data=cb_data)
         ])
-    
+
     keyboard.append([
         InlineKeyboardButton(text="↩ Назад к модулям", callback_data=f"course_{course_id}")
     ])
-    
+
     await callback.message.edit_text(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("locked_"))
+async def locked_lesson_handler(callback):
+    """Уведомление при нажатии на заблокированный урок"""
+    await callback.answer("🔒 Сначала пройди предыдущий урок!", show_alert=True)
 
 
 @router.callback_query(F.data == "start_inline")
