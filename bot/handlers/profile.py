@@ -7,7 +7,8 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram import types
-from database import async_session, get_user_profile
+from sqlalchemy import select
+from database import async_session, get_user_profile, TaskHistory, User
 from services.achievements import ACHIEVEMENTS
 from services.course_service import CourseService  #  Новый импорт
 
@@ -83,15 +84,43 @@ def _progress_bar(done: int, total: int) -> str:
     return f"{bar} {done}/{total}"
 
 
+async def _get_weak_topics(session, user: User, min_attempts: int = 2, top_n: int = 3) -> list[tuple[str, int]]:
+    """Возвращает топ-N слабых тем: [(lesson_title, percent_correct), ...]"""
+    result = await session.execute(
+        select(TaskHistory).where(TaskHistory.user_id == user.id)
+    )
+    rows = result.scalars().all()
+
+    totals: dict[str, int] = defaultdict(int)
+    corrects: dict[str, int] = defaultdict(int)
+    for row in rows:
+        key = row.lesson_id or "unknown"
+        totals[key] += 1
+        if row.is_correct:
+            corrects[key] += 1
+
+    stats = []
+    for lesson_id, total in totals.items():
+        if total < min_attempts:
+            continue
+        percent = round(corrects[lesson_id] / total * 100)
+        lesson = course_service.get_lesson(lesson_id)
+        title = lesson["title"] if lesson else lesson_id
+        stats.append((title, percent))
+
+    stats.sort(key=lambda x: x[1])
+    return stats[:top_n]
+
+
 @router.message(Command("profile"))
 @router.message(F.text == "👤 Профиль")
 async def profile_handler(message: Message):
     async with async_session() as session:
         user = await get_user_profile(session, message.from_user.id)
-
-    if user is None:
-        await message.answer("Профиль не найден. Напиши /start, чтобы зарегистрироваться.")
-        return
+        if user is None:
+            await message.answer("Профиль не найден. Напиши /start, чтобы зарегистрироваться.")
+            return
+        weak_topics = await _get_weak_topics(session, user)
 
     courses_index = _load_courses_index()
 
@@ -170,10 +199,19 @@ async def profile_handler(message: Message):
     # 🔥 Добавляем секцию текущего урока
     lines.extend(continue_section)
 
+    # --- Слабые темы ---
+    if weak_topics:
+        weak_lines = [f"  • {title} — {pct}%" for title, pct in weak_topics]
+    else:
+        weak_lines = ["  Реши задачи, чтобы увидеть слабые темы"]
+
     lines += [
         f"",
         f"📊 <b>Прогресс по курсам:</b>",
     ] + progress_lines + [
+        f"",
+        f"📉 <b>Слабые темы:</b>",
+    ] + weak_lines + [
         f"",
         f"🏅 <b>Достижения ({earned_count}/{total_count}):</b>",
     ] + achievement_lines + [
