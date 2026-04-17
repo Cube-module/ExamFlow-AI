@@ -249,12 +249,50 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
 
 async def send_task(message: types.Message, task: dict, state: FSMContext, task_num: int = 1, total: int = 5) -> None:
     """Вспомогательная функция: отправляет задачу пользователю"""
-    await message.answer(
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💡 Подсказка", callback_data=f"hint_{task_num - 1}")]
+    ])
+    sent = await message.answer(
         f"📝 <b>Задача {task_num} из {total}</b>\n\n{task['question']}",
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
     await state.set_state(LessonState.answering)
-    await state.update_data(current_solution_task=task)
+    await state.update_data(current_solution_task=task, hint_used=False, task_message_id=sent.message_id)
+
+
+@router.callback_query(F.data.startswith("hint_"))
+async def give_hint(callback: types.CallbackQuery, state: FSMContext):
+    """Выдаёт подсказку к текущей задаче (1 раз)"""
+    data = await state.get_data()
+
+    if data.get("hint_used"):
+        await callback.answer("Подсказка уже использована", show_alert=True)
+        return
+
+    task = data.get("current_solution_task")
+    if task is None:
+        await callback.answer("Задача не найдена", show_alert=True)
+        return
+
+    hint_text = await llm_service.get_hint(task)
+    await state.update_data(hint_used=True)
+
+    # Убираем кнопку подсказки из сообщения с задачей
+    task_message_id = data.get("task_message_id")
+    if task_message_id:
+        from aiogram.exceptions import TelegramBadRequest
+        try:
+            await callback.bot.edit_message_reply_markup(
+                chat_id=callback.message.chat.id,
+                message_id=task_message_id,
+                reply_markup=None
+            )
+        except TelegramBadRequest:
+            pass
+
+    await callback.message.answer(f"💡 <b>Подсказка:</b>\n\n{hint_text}", parse_mode="HTML")
+    await callback.answer()
 
 
 @router.message(LessonState.answering)
