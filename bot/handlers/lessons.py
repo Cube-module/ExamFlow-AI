@@ -118,7 +118,7 @@ async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
         user.current_lesson_id = next_lesson_id
 
         await session.commit()
-        await update_streak(session, user)
+        await update_streak(session, user, bot=callback.bot)
 
         # Проверяем достижения (перезагружаем с relationship-ами)
         user_full = await get_user_profile(session, callback.from_user.id)
@@ -364,7 +364,7 @@ async def check_answer(message: types.Message, state: FSMContext):
         async with async_session() as session:
             await get_or_create_user(session, message.from_user.id, message.from_user.username)
             user_full = await get_user_profile(session, message.from_user.id)
-            await update_streak(session, user_full)
+            await update_streak(session, user_full, bot=message.bot)
             new_achievements = await check_and_award(session, user_full)
 
         for ach_id in new_achievements:
