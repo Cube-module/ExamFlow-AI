@@ -346,7 +346,7 @@ async def course_selected_by_text(message: Message):
         lessons_count = len(module.get("lessons", []))
         text += f"{i}. {title} ({lessons_count} уроков)\n"
         keyboard.append([
-            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course['course_id']}_{module_id}")
+            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course['course_id']}:{module_id}")
         ])
     
     keyboard.append([
