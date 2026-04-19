@@ -1,6 +1,7 @@
 import json
 import logging
 from collections import defaultdict
+from datetime import date, datetime
 from pathlib import Path
 
 from aiogram import Router, F
@@ -255,6 +256,52 @@ async def profile_handler(message: Message):
 
     await message.answer(
         "\n".join(lines),
-        reply_markup=continue_keyboard,  # Кнопка продолжения (если есть урок)
+        reply_markup=continue_keyboard,
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("stats"))
+async def stats_handler(message: Message):
+    async with async_session() as session:
+        user = await get_user_profile(session, message.from_user.id)
+        if user is None:
+            await message.answer("Профиль не найден. Напиши /start.")
+            return
+
+        result = await session.execute(
+            select(TaskHistory).where(TaskHistory.user_id == user.id)
+        )
+        history = result.scalars().all()
+
+    if not history:
+        await message.answer("📊 Ты ещё не решал задачи. Начни практику в любом уроке!")
+        return
+
+    total = len(history)
+    correct = sum(1 for r in history if r.is_correct)
+    incorrect = total - correct
+    correct_pct = round(correct / total * 100)
+    incorrect_pct = 100 - correct_pct
+
+    today = date.today()
+    today_count = sum(
+        1 for r in history
+        if r.created_at and r.created_at.date() == today
+    )
+
+    by_day: dict[date, int] = defaultdict(int)
+    for r in history:
+        if r.created_at:
+            by_day[r.created_at.date()] += 1
+    best_day = max(by_day.values()) if by_day else 0
+
+    await message.answer(
+        "📊 <b>Статистика задач:</b>\n\n"
+        f"• Всего попыток: {total}\n"
+        f"• Правильных: {correct} ({correct_pct}%)\n"
+        f"• Неправильных: {incorrect} ({incorrect_pct}%)\n"
+        f"• Задач сегодня: {today_count}\n"
+        f"• Лучший день: {best_day} задач",
         parse_mode="HTML"
     )
