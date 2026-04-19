@@ -112,17 +112,44 @@ async def _get_weak_topics(session, user: User, min_attempts: int = 2, top_n: in
     return stats[:top_n]
 
 
+def _readiness_label(pct: int) -> str:
+    if pct < 30:
+        return "Только начало пути"
+    if pct < 60:
+        return "Хороший прогресс"
+    if pct <= 85:
+        return "Ты почти готов"
+    return "Отличная форма!"
+
+
+async def _get_readiness(session, user: User, courses_index: dict) -> int:
+    """Возвращает % готовности к экзамену по формуле 60/40."""
+    total_lessons = sum(c["total_lessons"] for c in courses_index.values())
+    lessons_done = sum(1 for p in user.progress if p.status == "completed")
+
+    result = await session.execute(
+        select(TaskHistory).where(TaskHistory.user_id == user.id)
+    )
+    history = result.scalars().all()
+    avg_score = (sum(1 for r in history if r.is_correct) / len(history)) if history else 0
+
+    lesson_ratio = (lessons_done / total_lessons) if total_lessons else 0
+    readiness = lesson_ratio * 0.6 + avg_score * 0.4
+    return round(readiness * 100)
+
+
 @router.message(Command("profile"))
 @router.message(F.text == "👤 Профиль")
 async def profile_handler(message: Message):
+    courses_index = _load_courses_index()
+
     async with async_session() as session:
         user = await get_user_profile(session, message.from_user.id)
         if user is None:
             await message.answer("Профиль не найден. Напиши /start, чтобы зарегистрироваться.")
             return
         weak_topics = await _get_weak_topics(session, user)
-
-    courses_index = _load_courses_index()
+        readiness_pct = await _get_readiness(session, user, courses_index)
 
     # --- Серия дней ---
     streak_line = _streak_bar(user.streak_count)
@@ -205,7 +232,14 @@ async def profile_handler(message: Message):
     else:
         weak_lines = ["  Реши задачи, чтобы увидеть слабые темы"]
 
+    readiness_bar = _progress_bar(readiness_pct, 100)
+    readiness_label = _readiness_label(readiness_pct)
+
     lines += [
+        f"",
+        f"🎯 <b>Готовность к экзамену: {readiness_pct}%</b>",
+        f"  {readiness_bar}",
+        f"  {readiness_label}",
         f"",
         f"📊 <b>Прогресс по курсам:</b>",
     ] + progress_lines + [
