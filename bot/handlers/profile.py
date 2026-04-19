@@ -154,7 +154,7 @@ async def profile_handler(message: Message):
 
     # --- Серия дней ---
     streak_line = _streak_bar(user.streak_count)
-    freeze_line = "❄️ Заморозка: доступна" if user.freeze_available else ""
+    freeze_line = "❄️ Заморозка: доступна" if user.freeze_available else "❄️ Заморозка: нет"
 
     # --- 🔥 Текущий урок (для быстрого продолжения) ---
     continue_section = []
@@ -220,10 +220,9 @@ async def profile_handler(message: Message):
         f"👤 <b>Личный кабинет</b>",
         f"",
         f"🔥 <b>Серия дней:</b> {streak_line}",
+        freeze_line,
     ]
-    if freeze_line:
-        lines.append(freeze_line)
-    
+
     # 🔥 Добавляем секцию текущего урока
     lines.extend(continue_section)
 

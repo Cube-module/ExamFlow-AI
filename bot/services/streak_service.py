@@ -64,7 +64,7 @@ async def check_streak_loss(session: AsyncSession, user: User) -> bool:
     if delta_days >= 2:
         if user.freeze_available:
             user.freeze_available = False
-            user.streak_count = 0
+            # серия сохраняется — заморозка поглощает пропуск
         else:
             user.streak_count = 0
         user.last_activity_date = now
