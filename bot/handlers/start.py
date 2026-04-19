@@ -371,6 +371,25 @@ async def ask_handler(message: Message):
     await message.answer(f"💡 {answer}")
 
 
+@router.message(Command("continue"))
+async def continue_learning(message: Message):
+    """Продолжить с последнего урока"""
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+
+    if not user.current_lesson_id:
+        await message.answer("📚 Ты ещё не начал обучение. Выбери курс в /start")
+        return
+
+    lesson = course_service.get_lesson(user.current_lesson_id)
+    if not lesson:
+        await message.answer("⚠️ Урок не найден. Начни заново: /start")
+        return
+
+    text = f"📚 <b>{escape(lesson['title'])}</b>\n..."
+    await message.answer(text, parse_mode="HTML")
+
+
 @router.message(StateFilter(None))
 async def fallback_handler(message: Message):
     courses = course_service.get_all_courses()
@@ -378,23 +397,3 @@ async def fallback_handler(message: Message):
         "Не понял команду. Выбери курс из меню или напиши /help.",
         reply_markup=build_main_keyboard(courses)
     )
-
-
-@router.message(Command("continue"))
-async def continue_learning(message: Message):
-    """Продолжить с последнего урока"""
-    async with async_session() as session:
-        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-    
-    if not user.current_lesson_id:
-        await message.answer("📚 Ты ещё не начал обучение. Выбери курс в /start")
-        return
-    
-    lesson = course_service.get_lesson(user.current_lesson_id)
-    if not lesson:
-        await message.answer("⚠️ Урок не найден. Начни заново: /start")
-        return
-    
-    # Показываем урок (код как в show_lesson)
-    text = f"📚 <b>{lesson['title']}</b>\n..."
-    await message.answer(text, parse_mode="HTML")
