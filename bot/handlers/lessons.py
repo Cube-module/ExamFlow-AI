@@ -303,8 +303,8 @@ async def check_answer(message: types.Message, state: FSMContext):
         if message.text == "/start":
             await state.clear()  # Сбрасываем состояние!
             # Перенаправляем на start
-            from handlers.start import cmd_start
-            await cmd_start(message)
+            from handlers.start import start
+            await start(message)
             return
         elif message.text == "/profile":
             await state.clear()  # Сбрасываем состояние!
