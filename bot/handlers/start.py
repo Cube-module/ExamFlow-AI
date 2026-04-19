@@ -1,4 +1,6 @@
 import logging
+from html import escape
+
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -107,27 +109,10 @@ async def help_callback_handler(callback: types.CallbackQuery):
     await callback.answer()  # Просто закрываем "часики" на кнопке
 
 
-@router.callback_query(F.data.startswith("course_"))
-async def show_course_modules(callback):
-    """ Показывает модули выбранного курса"""
-    from html import escape
-    course_id = callback.data.removeprefix("course_")
-    course = course_service.get_course_by_id(course_id)
-    
-    if not course:
-        await callback.answer("❌ Курс не найден", show_alert=True)
-        return
-    
-    # Сохраняем выбранный курс в БД (для совместимости)
-    async with async_session() as session:
-        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-        user.selected_course = course.get("title", course_id)
-        await session.commit()
-    
+def _build_course_modules_text_keyboard(course: dict, course_id: str) -> tuple[str, InlineKeyboardMarkup]:
     text = f"📚 <b>{escape(course['title'])}</b>\n\n"
     text += f"{escape(course.get('description', ''))}\n\n"
     text += f"📦 <b>Модули:</b>\n\n"
-    
     keyboard = []
     for i, module in enumerate(course.get("modules", []), 1):
         module_id = module["module_id"]
@@ -137,23 +122,97 @@ async def show_course_modules(callback):
         keyboard.append([
             InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course_id}:{module_id}")
         ])
-    
-    keyboard.append([
-        InlineKeyboardButton(text="↩ Назад к курсам", callback_data="start_inline")
-    ])
-    
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
-        parse_mode="HTML"
-    )
+    keyboard.append([InlineKeyboardButton(text="↩ Назад к курсам", callback_data="start_inline")])
+    return text, InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+@router.callback_query(F.data.startswith("course_"))
+async def show_course_modules(callback):
+    """Показывает модули выбранного курса. При смене курса запрашивает подтверждение."""
+    course_id = callback.data.removeprefix("course_")
+    course = course_service.get_course_by_id(course_id)
+
+    if not course:
+        await callback.answer("❌ Курс не найден", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        current_course = user.selected_course
+
+    new_title = course.get("title", course_id)
+    if current_course and current_course != new_title:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, сменить", callback_data=f"confirm_switch_{course_id}")],
+            [InlineKeyboardButton(text="❌ Остаться", callback_data="cancel_switch")],
+        ])
+        await callback.message.edit_text(
+            f"⚠️ <b>Сменить курс?</b>\n\n"
+            f"Прогресс по текущему курсу сохранится, "
+            f"но серия уроков начнётся заново.",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        user.selected_course = new_title
+        await session.commit()
+
+    text, keyboard = _build_course_modules_text_keyboard(course, course_id)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_switch_"))
+async def confirm_course_switch(callback):
+    """Подтверждение смены курса: сбрасывает current_lesson_id и открывает новый курс."""
+    course_id = callback.data.removeprefix("confirm_switch_")
+    course = course_service.get_course_by_id(course_id)
+
+    if not course:
+        await callback.answer("❌ Курс не найден", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        user.selected_course = course.get("title", course_id)
+        user.current_lesson_id = None
+        await session.commit()
+
+    text, keyboard = _build_course_modules_text_keyboard(course, course_id)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_switch")
+async def cancel_course_switch(callback):
+    """Отказ от смены курса: возвращает к текущему курсу или списку курсов."""
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        current_title = user.selected_course
+
+    courses = course_service.get_all_courses()
+    current_course = next((c for c in courses if c.get("title") == current_title), None)
+
+    if current_course:
+        course_id = current_course["course_id"]
+        text, keyboard = _build_course_modules_text_keyboard(current_course, course_id)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await callback.message.edit_text(
+            "👋 <b>Выбери курс для обучения:</b>",
+            reply_markup=build_inline_course_keyboard(courses),
+            parse_mode="HTML"
+        )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("module_"))
 async def show_module_lessons(callback):
     """Показывает уроки модуля со статусами прогресса (✅/▶️/🔒)"""
-    from html import escape
 
     data = callback.data.removeprefix("module_")
     if ":" not in data:
