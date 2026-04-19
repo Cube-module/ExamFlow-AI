@@ -386,8 +386,27 @@ async def continue_learning(message: Message):
         await message.answer("⚠️ Урок не найден. Начни заново: /start")
         return
 
-    text = f"📚 <b>{escape(lesson['title'])}</b>\n..."
-    await message.answer(text, parse_mode="HTML")
+    lesson_id = user.current_lesson_id
+    text = f"📚 <b>{escape(lesson['title'])}</b>\n"
+    text += f"<i>Модуль: {escape(lesson['module_title'])}</i>\n\n"
+    text += escape(lesson["content"])
+    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{escape(lesson['summary'])}"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Понял, дальше", callback_data=f"next_lesson_{lesson_id}"),
+            InlineKeyboardButton(text="❓ Не понял", callback_data=f"ask_ai_{lesson_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📝 Хочу практику", callback_data=f"practice_{lesson_id}"),
+        ],
+    ])
+    if lesson.get("video_resources"):
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text="🎥 Видео по теме", callback_data=f"videos_{lesson_id}")
+        ])
+
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.message(StateFilter(None))
