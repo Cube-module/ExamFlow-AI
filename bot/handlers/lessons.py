@@ -312,6 +312,7 @@ async def check_answer(message: types.Message, state: FSMContext):
             await profile_handler(message)
             return
         elif message.text == "/help":
+            from handlers.start import HELP_TEXT
             await message.answer(HELP_TEXT)
             return
         else:
