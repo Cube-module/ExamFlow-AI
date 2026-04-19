@@ -36,19 +36,18 @@ def _achievement_text(achievement_id: str) -> str:
 @router.callback_query(F.data.startswith("lesson_"))
 async def show_lesson(callback: types.CallbackQuery):
     """ [EF-002] Загружает реальный контент урока из courses.json"""
+    from html import escape
     lesson_id = callback.data.removeprefix("lesson_")
-    
-    # Загружаем урок из JSON
+
     lesson = course_service.get_lesson(lesson_id)
     if not lesson:
         await callback.answer("❌ Урок не найден", show_alert=True)
         return
-    
-    # Формируем текст сообщения
-    text = f"📚 <b>{lesson['title']}</b>\n"
-    text += f"<i>Модуль: {lesson['module_title']}</i>\n\n"
-    text += lesson["content"]
-    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{lesson['summary']}"
+
+    text = f"📚 <b>{escape(lesson['title'])}</b>\n"
+    text += f"<i>Модуль: {escape(lesson['module_title'])}</i>\n\n"
+    text += escape(lesson["content"])
+    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{escape(lesson['summary'])}"
     
     # Кнопки навигации
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
