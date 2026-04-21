@@ -77,23 +77,20 @@ async def start(message: Message):
         is_new = user.selected_course is None
         logger.info("User %s: %s", message.from_user.id, "registered" if is_new else "returned")
 
-    # 🔥 Загружаем курсы из courses.json
     courses = course_service.get_all_courses()
-    
-    welcome_text = f"""
-Привет, {message.from_user.first_name}! 👋
 
-Я ExamFlow-AI – твой персональный помощник для подготовки к экзаменам!
+    if is_new:
+        await message.answer(
+            "👋 Как это работает:\n\n"
+            "📚 Выбери курс → читай теорию → решай задачи\n"
+            "🔥 Занимайся каждый день — строй серию\n"
+            "🤖 Жми «Не понял» — ИИ объяснит тему\n"
+            "🏆 Зарабатывай достижения и следи за прогрессом"
+        )
+        welcome_text = f"Привет, {message.from_user.first_name}! Выбери курс, чтобы начать:"
+    else:
+        welcome_text = f"С возвращением, {message.from_user.first_name}! Выбери курс:"
 
-Что я умею:
-• 📚 Провожу через структурированные курсы
-• 🤖 Объясняю сложные темы простым языком
-• ✏️ Генерирую практические задачи
-• 🔥 Помогаю поддерживать дисциплину (серии, ачивки)
-
-Выбери курс, чтобы начать обучение:
-"""
-    # Используем inline-клавиатуру для удобной навигации
     await message.answer(welcome_text, reply_markup=build_inline_course_keyboard(courses))
 
 
