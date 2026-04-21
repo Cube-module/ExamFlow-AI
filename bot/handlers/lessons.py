@@ -23,6 +23,24 @@ course_service = CourseService()  #  Инициализируем сервис �
 class LessonState(StatesGroup):
     answering = State()
     asking_ai = State()
+    reviewing = State()
+
+
+def _build_final_screen(correct_count: int, total: int, lesson_id: str, has_errors: bool) -> tuple[str, InlineKeyboardMarkup]:
+    incorrect_count = total - correct_count
+    percent = round(correct_count / total * 100)
+    text = (
+        f"🎉 <b>Сессия завершена!</b>\n\n"
+        f"✅ Правильно: {correct_count}/{total}\n"
+        f"❌ Неправильно: {incorrect_count}/{total}\n"
+        f"🏆 Результат: {percent}%"
+    )
+    buttons = []
+    if has_errors:
+        buttons.append([InlineKeyboardButton(text="📋 Разбор ошибок", callback_data="show_errors")])
+    buttons.append([InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")])
+    buttons.append([InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _achievement_text(achievement_id: str) -> str:
@@ -228,6 +246,7 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
     # Получаем понятную тему для генерации задач
     topic = course_service.get_lesson_topic(lesson_id)
     
+    await state.clear()
     tasks = await llm_service.generate_tasks(topic=topic, count=5)
 
     if not tasks:
@@ -240,6 +259,7 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
         current_task=0,
         correct_count=0,
         wrong_attempts=0,
+        failed_tasks=[],
         lesson_id=lesson_id,
         topic=topic
     )
@@ -376,22 +396,11 @@ async def check_answer(message: types.Message, state: FSMContext):
             await state.update_data(current_task=next_task_index)
             await send_task(message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
         else:
-            incorrect_count = total - correct_count
-            percent = round(correct_count / total * 100)
             lesson_id = data.get("lesson_id", "")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")],
-                [InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")],
-            ])
-            await message.answer(
-                f"🎉 <b>Сессия завершена!</b>\n\n"
-                f"✅ Правильно: {correct_count}/{total}\n"
-                f"❌ Неправильно: {incorrect_count}/{total}\n"
-                f"🏆 Результат: {percent}%",
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-            await state.clear()
+            failed_tasks = data.get("failed_tasks", [])
+            text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            await state.set_state(LessonState.reviewing)
     else:
         wrong_attempts = data.get("wrong_attempts", 0) + 1
         await state.update_data(wrong_attempts=wrong_attempts)
@@ -425,27 +434,63 @@ async def skip_to_next_task(callback: types.CallbackQuery, state: FSMContext):
     correct_count = data.get("correct_count", 0)
     total = len(tasks)
 
+    # Фиксируем пропущенную задачу как ошибку
+    failed_tasks: list = data.get("failed_tasks", [])
+    current_task = data.get("current_solution_task")
+    if current_task:
+        failed_tasks = failed_tasks + [current_task]
+        await state.update_data(failed_tasks=failed_tasks)
+
     next_task_index = current_task_index + 1
     if next_task_index < total:
         await state.update_data(current_task=next_task_index, wrong_attempts=0)
         await send_task(callback.message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
     else:
-        incorrect_count = total - correct_count
-        percent = round(correct_count / total * 100)
         lesson_id = data.get("lesson_id", "")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")],
-            [InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")],
-        ])
-        await callback.message.answer(
-            f"🎉 <b>Сессия завершена!</b>\n\n"
-            f"✅ Правильно: {correct_count}/{total}\n"
-            f"❌ Неправильно: {incorrect_count}/{total}\n"
-            f"🏆 Результат: {percent}%",
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-        await state.clear()
+        text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await state.set_state(LessonState.reviewing)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "show_errors")
+async def show_errors(callback: types.CallbackQuery, state: FSMContext):
+    """Показывает разбор ошибок сессии"""
+    data = await state.get_data()
+    failed_tasks: list = data.get("failed_tasks", [])
+
+    if not failed_tasks:
+        await callback.answer("Ошибок нет!", show_alert=True)
+        return
+
+    lines = ["📋 <b>Разбор ошибок:</b>\n"]
+    for i, task in enumerate(failed_tasks, 1):
+        lines.append(f"{i}. {task.get('question', '—')}")
+        lines.append(f"   ✅ Правильный ответ: <b>{task.get('answer', '—')}</b>\n")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↩ Назад к итогам", callback_data="back_to_summary")]
+    ])
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_summary")
+async def back_to_summary(callback: types.CallbackQuery, state: FSMContext):
+    """Возвращает к итоговому экрану сессии"""
+    data = await state.get_data()
+    correct_count = data.get("correct_count", 0)
+    tasks = data.get("tasks", [])
+    lesson_id = data.get("lesson_id", "")
+    failed_tasks = data.get("failed_tasks", [])
+    total = len(tasks)
+
+    text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
