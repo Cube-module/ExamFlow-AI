@@ -239,6 +239,7 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
         tasks=tasks,
         current_task=0,
         correct_count=0,
+        wrong_attempts=0,
         lesson_id=lesson_id,
         topic=topic
     )
@@ -392,11 +393,60 @@ async def check_answer(message: types.Message, state: FSMContext):
             )
             await state.clear()
     else:
-        await message.answer(
-            f"❌ {result['feedback']}\n\n"
-            f"💡 Подсказка: {task.get('hint', 'Попробуй ещё раз')}\n"
-            f"Попробуй ещё раз:"
+        wrong_attempts = data.get("wrong_attempts", 0) + 1
+        await state.update_data(wrong_attempts=wrong_attempts)
+
+        if wrong_attempts >= 3:
+            await state.update_data(wrong_attempts=0)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ Следующая задача", callback_data="next_task")]
+            ])
+            await message.answer(
+                f"❌ {result['feedback']}\n\n"
+                f"📖 Правильный ответ: <b>{task.get('answer', '—')}</b>\n"
+                f"💡 {task.get('hint', '')}",
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"❌ {result['feedback']}\n\n"
+                f"💡 Подсказка: {task.get('hint', 'Попробуй ещё раз')}\n"
+                f"Попробуй ещё раз: ({wrong_attempts}/3)"
+            )
+
+
+@router.callback_query(F.data == "next_task")
+async def skip_to_next_task(callback: types.CallbackQuery, state: FSMContext):
+    """Переход к следующей задаче после раскрытия ответа (задача засчитана как неверная)"""
+    data = await state.get_data()
+    tasks = data.get("tasks", [])
+    current_task_index = data.get("current_task", 0)
+    correct_count = data.get("correct_count", 0)
+    total = len(tasks)
+
+    next_task_index = current_task_index + 1
+    if next_task_index < total:
+        await state.update_data(current_task=next_task_index, wrong_attempts=0)
+        await send_task(callback.message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
+    else:
+        incorrect_count = total - correct_count
+        percent = round(correct_count / total * 100)
+        lesson_id = data.get("lesson_id", "")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")],
+            [InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")],
+        ])
+        await callback.message.answer(
+            f"🎉 <b>Сессия завершена!</b>\n\n"
+            f"✅ Правильно: {correct_count}/{total}\n"
+            f"❌ Неправильно: {incorrect_count}/{total}\n"
+            f"🏆 Результат: {percent}%",
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
+        await state.clear()
+    await callback.answer()
 
 
 @router.message(Command("cancel"))
