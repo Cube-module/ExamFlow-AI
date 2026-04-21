@@ -1,11 +1,12 @@
 import logging
+import random
 from datetime import datetime
 
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command, StateFilter 
+from aiogram.filters import CommandStart, Command, StateFilter
 
 
 from database import async_session, get_or_create_user, get_user_profile, UserProgress, TaskHistory
@@ -238,21 +239,15 @@ async def handle_ai_question(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data.startswith("practice_"))
-async def start_practice(callback: types.CallbackQuery, state: FSMContext):
-    """ [EF-002] Генерирует задачи по реальной теме урока"""
-    lesson_id = callback.data.removeprefix("practice_")
-    
-    # Получаем понятную тему для генерации задач
+async def _run_practice_session(message: types.Message, lesson_id: str, state: FSMContext) -> bool:
+    """Запускает сессию практики по lesson_id. Возвращает False если задачи не загрузились."""
     topic = course_service.get_lesson_topic(lesson_id)
-    
     await state.clear()
     tasks = await llm_service.generate_tasks(topic=topic, count=5)
 
     if not tasks:
-        await callback.message.answer("⚠️ Не удалось загрузить задачи. Попробуй позже.")
-        await callback.answer()
-        return
+        await message.answer("⚠️ Не удалось загрузить задачи. Попробуй позже.")
+        return False
 
     await state.update_data(
         tasks=tasks,
@@ -263,8 +258,45 @@ async def start_practice(callback: types.CallbackQuery, state: FSMContext):
         lesson_id=lesson_id,
         topic=topic
     )
-    await send_task(callback.message, tasks[0], state, task_num=1, total=len(tasks))
+    await send_task(message, tasks[0], state, task_num=1, total=len(tasks))
+    return True
+
+
+@router.callback_query(F.data.startswith("practice_"))
+async def start_practice(callback: types.CallbackQuery, state: FSMContext):
+    """Генерирует задачи по реальной теме урока"""
+    lesson_id = callback.data.removeprefix("practice_")
+    await _run_practice_session(callback.message, lesson_id, state)
     await callback.answer()
+
+
+@router.message(Command("quiz"))
+async def quiz_handler(message: types.Message, state: FSMContext):
+    """Быстрая практика по случайной теме текущего курса"""
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        selected_course = user.selected_course
+
+    if not selected_course:
+        await message.answer("📚 Сначала выбери курс в /start")
+        return
+
+    # Ищем курс по title → course_id
+    all_courses = course_service.get_all_courses()
+    course = next((c for c in all_courses if c.get("title") == selected_course), None)
+    if not course:
+        await message.answer("⚠️ Курс не найден. Попробуй /start")
+        return
+
+    lesson_ids = course_service.get_all_lesson_ids_for_course(course["course_id"])
+    if not lesson_ids:
+        await message.answer("⚠️ В курсе нет уроков.")
+        return
+
+    lesson_id = random.choice(lesson_ids)
+    topic = course_service.get_lesson_topic(lesson_id)
+    await message.answer(f"🎲 Случайная тема: <b>{topic}</b>", parse_mode="HTML")
+    await _run_practice_session(message, lesson_id, state)
 
 
 async def send_task(message: types.Message, task: dict, state: FSMContext, task_num: int = 1, total: int = 5) -> None:
