@@ -299,6 +299,12 @@ async def quiz_handler(message: types.Message, state: FSMContext):
     await _run_practice_session(message, lesson_id, state)
 
 
+@router.callback_query(F.data == "quiz_inline")
+async def quiz_inline_handler(callback: types.CallbackQuery, state: FSMContext):
+    await quiz_handler(callback.message, state)
+    await callback.answer()
+
+
 async def send_task(message: types.Message, task: dict, state: FSMContext, task_num: int = 1, total: int = 5) -> None:
     """Вспомогательная функция: отправляет задачу пользователю"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

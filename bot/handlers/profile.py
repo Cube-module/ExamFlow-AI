@@ -158,8 +158,7 @@ async def profile_handler(message: Message):
 
     # --- 🔥 Текущий урок (для быстрого продолжения) ---
     continue_section = []
-    continue_keyboard = None
-    
+
     if user.current_lesson_id:
         lesson = course_service.get_lesson(user.current_lesson_id)
         if lesson:
@@ -167,12 +166,18 @@ async def profile_handler(message: Message):
                 f"",
                 f"📍 <b>Следующий урок:</b> {lesson['title']}",
                 f"<i>Модуль: {lesson['module_title']}</i>",
-                f"Нажми кнопку ниже, чтобы продолжить:",
             ]
-            continue_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="▶️ Продолжить обучение", 
-                                     callback_data=f"lesson_{user.current_lesson_id}")]
-            ])
+
+    # --- Клавиатура быстрых действий ---
+    action_rows = []
+    first_row = []
+    if user.current_lesson_id:
+        first_row.append(InlineKeyboardButton(text="▶️ Продолжить",
+                                              callback_data=f"lesson_{user.current_lesson_id}"))
+    first_row.append(InlineKeyboardButton(text="🎲 Практика", callback_data="quiz_inline"))
+    action_rows.append(first_row)
+    action_rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="stats_inline")])
+    continue_keyboard = InlineKeyboardMarkup(inline_keyboard=action_rows)
 
     # --- Прогресс по курсам ---
     completed_ids: set[str] = {
@@ -250,7 +255,7 @@ async def profile_handler(message: Message):
         f"🏅 <b>Достижения ({earned_count}/{total_count}):</b>",
     ] + achievement_lines + [
         f"",
-        f"💡 <b>Команды:</b> /continue — продолжить, /help — справка"
+        f"💡 <b>Команды:</b> /help — справка"
     ]
 
     await message.answer(
@@ -304,3 +309,9 @@ async def stats_handler(message: Message):
         f"• Лучший день: {best_day} задач",
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data == "stats_inline")
+async def stats_inline_handler(callback: types.CallbackQuery):
+    await stats_handler(callback.message)
+    await callback.answer()
