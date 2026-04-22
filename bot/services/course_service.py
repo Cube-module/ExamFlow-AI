@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Optional, List
 
 class CourseService:
-    def __init__(self, courses_path: str = "bot/data/courses.json"):
+    def __init__(self, courses_path: str = None):
+        if courses_path is None:
+            courses_path = Path(__file__).parent.parent / "data" / "courses.json"
         self.courses_path = Path(courses_path)
         self._cache: Optional[dict] = None
     
@@ -77,6 +79,17 @@ class CourseService:
             return f"{lesson['module_title']}: {lesson['title']}"
         return lesson_id
     
+    def get_all_lesson_ids_for_course(self, course_id: str) -> List[str]:
+        """Возвращает все lesson_id курса по порядку"""
+        course = self.get_course_by_id(course_id)
+        if not course:
+            return []
+        return [
+            lesson["lesson_id"]
+            for module in course.get("modules", [])
+            for lesson in module.get("lessons", [])
+        ]
+
     def get_next_lesson_id(self, current_lesson_id: str) -> Optional[str]:
         """Находит ID следующего урока или None, если курс завершён"""
         courses = self._load_courses()

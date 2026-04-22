@@ -1,17 +1,19 @@
 import logging
+import random
 from datetime import datetime
 
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command, StateFilter 
+from aiogram.filters import CommandStart, Command, StateFilter
 
 
-from database import async_session, get_or_create_user, UserProgress
+from database import async_session, get_or_create_user, get_user_profile, UserProgress, TaskHistory
 from services.llm_interface import llm_service
 from services.streak_service import update_streak
-from services.course_service import CourseService  # Новый импорт
+from services.achievements import check_and_award, ACHIEVEMENTS
+from services.course_service import CourseService
 
 logger = logging.getLogger(__name__)
 
@@ -22,24 +24,49 @@ course_service = CourseService()  #  Инициализируем сервис �
 class LessonState(StatesGroup):
     answering = State()
     asking_ai = State()
+    reviewing = State()
+
+
+def _build_final_screen(correct_count: int, total: int, lesson_id: str, has_errors: bool) -> tuple[str, InlineKeyboardMarkup]:
+    incorrect_count = total - correct_count
+    percent = round(correct_count / total * 100)
+    text = (
+        f"🎉 <b>Сессия завершена!</b>\n\n"
+        f"✅ Правильно: {correct_count}/{total}\n"
+        f"❌ Неправильно: {incorrect_count}/{total}\n"
+        f"🏆 Результат: {percent}%"
+    )
+    buttons = []
+    if has_errors:
+        buttons.append([InlineKeyboardButton(text="📋 Разбор ошибок", callback_data="show_errors")])
+    buttons.append([InlineKeyboardButton(text="🔄 Ещё задачи", callback_data=f"practice_{lesson_id}")])
+    buttons.append([InlineKeyboardButton(text="↩ Назад к уроку", callback_data=f"lesson_{lesson_id}")])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _achievement_text(achievement_id: str) -> str:
+    ach = ACHIEVEMENTS.get(achievement_id, {})
+    emoji = ach.get("emoji", "🏅")
+    title = ach.get("title", achievement_id)
+    desc = ach.get("desc", "")
+    return f"🏅 Новое достижение: {emoji} <b>{title}</b>! {desc}"
 
 
 @router.callback_query(F.data.startswith("lesson_"))
 async def show_lesson(callback: types.CallbackQuery):
     """ [EF-002] Загружает реальный контент урока из courses.json"""
+    from html import escape
     lesson_id = callback.data.removeprefix("lesson_")
-    
-    # Загружаем урок из JSON
+
     lesson = course_service.get_lesson(lesson_id)
     if not lesson:
         await callback.answer("❌ Урок не найден", show_alert=True)
         return
-    
-    # Формируем текст сообщения
-    text = f"📚 <b>{lesson['title']}</b>\n"
-    text += f"<i>Модуль: {lesson['module_title']}</i>\n\n"
-    text += lesson["content"]
-    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{lesson['summary']}"
+
+    text = f"📚 <b>{escape(lesson['title'])}</b>\n"
+    text += f"<i>Модуль: {escape(lesson['module_title'])}</i>\n\n"
+    text += escape(lesson["content"])
+    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{escape(lesson['summary'])}"
     
     # Кнопки навигации
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -103,14 +130,21 @@ async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
         progress.status = "completed"
         progress.score = max(progress.score or 0, 10)
         progress.completed_at = datetime.utcnow()
-        
+
         # Находим следующий урок
         next_lesson_id = course_service.get_next_lesson_id(current_lesson_id)
         user.current_lesson_id = next_lesson_id
-        
+
         await session.commit()
-        await update_streak(session, user)
-    
+        await update_streak(session, user, bot=callback.bot)
+
+        # Проверяем достижения (перезагружаем с relationship-ами)
+        user_full = await get_user_profile(session, callback.from_user.id)
+        new_achievements = await check_and_award(session, user_full)
+
+    for ach_id in new_achievements:
+        await callback.message.answer(_achievement_text(ach_id), parse_mode="HTML")
+
     # Проверяем, есть ли следующий урок
     if not next_lesson_id:
         await callback.message.edit_text(
@@ -155,65 +189,12 @@ async def next_lesson(callback: types.CallbackQuery, state: FSMContext):
         keyboard.inline_keyboard.append([
             InlineKeyboardButton(text="🎥 Видео по теме", callback_data=f"videos_{next_lesson_id}")
         ])
-    
-    await callback.message.edit_text(
-        text,
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
-    await callback.answer()
 
-    
-    # 2. Находим следующий урок
-    next_lesson_id = course_service.get_next_lesson_id(current_lesson_id)
-    
-    if not next_lesson_id:
-        # Курс завершён!
-        await callback.message.edit_text(
-            "🎉 <b>Поздравляем! Курс завершён!</b>\n\n"
-            "Ты прошёл все уроки. Теперь можешь:\n"
-            "• Повторить сложные темы в профиле\n"
-            "• Пройти курс заново для закрепления",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📊 Мой прогресс", callback_data="profile")],
-                [InlineKeyboardButton(text="🔄 Начать сначала", callback_data="course_restart")]
-            ]),
-            parse_mode="HTML"
-        )
-        await callback.answer()
-        return
-    
-    # 3. Загружаем и показываем следующий урок
-    lesson = course_service.get_lesson(next_lesson_id)
-    if not lesson:
-        await callback.answer("❌ Следующий урок не найден", show_alert=True)
-        return
-    
-    text = f"📚 <b>{lesson['title']}</b>\n"
-    text += f"<i>Модуль: {lesson['module_title']}</i>\n\n"
-    text += lesson["content"]
-    text += f"\n\n💡 <b>Главное за 1 минуту:</b>\n{lesson['summary']}"
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Понял, дальше", callback_data=f"next_lesson_{next_lesson_id}"),
-            InlineKeyboardButton(text="❓ Не понял", callback_data=f"ask_ai_{next_lesson_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="📝 Хочу практику", callback_data=f"practice_{next_lesson_id}"),
-        ],
-    ])
-    
-    if lesson.get("video_resources"):
-        keyboard.inline_keyboard.append([
-            InlineKeyboardButton(text="🎥 Видео по теме", callback_data=f"videos_{next_lesson_id}")
-        ])
-    
-    await callback.message.edit_text(
-        text,
-        reply_markup=keyboard,
-        parse_mode="HTML"
-    )
+    from aiogram.exceptions import TelegramBadRequest
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
@@ -258,36 +239,118 @@ async def handle_ai_question(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data.startswith("practice_"))
-async def start_practice(callback: types.CallbackQuery, state: FSMContext):
-    """ [EF-002] Генерирует задачи по реальной теме урока"""
-    lesson_id = callback.data.removeprefix("practice_")
-    
-    # Получаем понятную тему для генерации задач
+async def _run_practice_session(message: types.Message, lesson_id: str, state: FSMContext) -> bool:
+    """Запускает сессию практики по lesson_id. Возвращает False если задачи не загрузились."""
     topic = course_service.get_lesson_topic(lesson_id)
-    
-    tasks = await llm_service.generate_tasks(topic=topic, count=3)
-    
+    await state.clear()
+    tasks = await llm_service.generate_tasks(topic=topic, count=5)
+
     if not tasks:
-        await callback.message.answer("⚠️ Не удалось загрузить задачи. Попробуй позже.")
-        await callback.answer()
-        return
-    
+        await message.answer("⚠️ Не удалось загрузить задачи. Попробуй позже.")
+        return False
+
     await state.update_data(
         tasks=tasks,
         current_task=0,
+        correct_count=0,
+        wrong_attempts=0,
+        failed_tasks=[],
         lesson_id=lesson_id,
-        topic=topic  # Сохраняем тему для отладки
+        topic=topic
     )
-    await send_task(callback.message, tasks[0], state)
+    await send_task(message, tasks[0], state, task_num=1, total=len(tasks))
+    return True
+
+
+@router.callback_query(F.data.startswith("practice_"))
+async def start_practice(callback: types.CallbackQuery, state: FSMContext):
+    """Генерирует задачи по реальной теме урока"""
+    lesson_id = callback.data.removeprefix("practice_")
+    await _run_practice_session(callback.message, lesson_id, state)
     await callback.answer()
 
 
-async def send_task(message: types.Message, task: dict, state: FSMContext) -> None:
+@router.message(Command("quiz"))
+async def quiz_handler(message: types.Message, state: FSMContext):
+    """Быстрая практика по случайной теме текущего курса"""
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        selected_course = user.selected_course
+
+    if not selected_course:
+        await message.answer("📚 Сначала выбери курс в /start")
+        return
+
+    # Ищем курс по title → course_id
+    all_courses = course_service.get_all_courses()
+    course = next((c for c in all_courses if c.get("title") == selected_course), None)
+    if not course:
+        await message.answer("⚠️ Курс не найден. Попробуй /start")
+        return
+
+    lesson_ids = course_service.get_all_lesson_ids_for_course(course["course_id"])
+    if not lesson_ids:
+        await message.answer("⚠️ В курсе нет уроков.")
+        return
+
+    lesson_id = random.choice(lesson_ids)
+    topic = course_service.get_lesson_topic(lesson_id)
+    await message.answer(f"🎲 Случайная тема: <b>{topic}</b>", parse_mode="HTML")
+    await _run_practice_session(message, lesson_id, state)
+
+
+@router.callback_query(F.data == "quiz_inline")
+async def quiz_inline_handler(callback: types.CallbackQuery, state: FSMContext):
+    await quiz_handler(callback.message, state)
+    await callback.answer()
+
+
+async def send_task(message: types.Message, task: dict, state: FSMContext, task_num: int = 1, total: int = 5) -> None:
     """Вспомогательная функция: отправляет задачу пользователю"""
-    await message.answer(f"📝 <b>Задача:</b>\n{task['question']}", parse_mode="HTML")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💡 Подсказка", callback_data=f"hint_{task_num - 1}")]
+    ])
+    sent = await message.answer(
+        f"📝 <b>Задача {task_num} из {total}</b>\n\n{task['question']}",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
     await state.set_state(LessonState.answering)
-    await state.update_data(current_solution_task=task)
+    await state.update_data(current_solution_task=task, hint_used=False, task_message_id=sent.message_id)
+
+
+@router.callback_query(F.data.startswith("hint_"))
+async def give_hint(callback: types.CallbackQuery, state: FSMContext):
+    """Выдаёт подсказку к текущей задаче (1 раз)"""
+    data = await state.get_data()
+
+    if data.get("hint_used"):
+        await callback.answer("Подсказка уже использована", show_alert=True)
+        return
+
+    task = data.get("current_solution_task")
+    if task is None:
+        await callback.answer("Задача не найдена", show_alert=True)
+        return
+
+    hint_text = await llm_service.get_hint(task)
+    await state.update_data(hint_used=True)
+
+    # Убираем кнопку подсказки из сообщения с задачей
+    task_message_id = data.get("task_message_id")
+    if task_message_id:
+        from aiogram.exceptions import TelegramBadRequest
+        try:
+            await callback.bot.edit_message_reply_markup(
+                chat_id=callback.message.chat.id,
+                message_id=task_message_id,
+                reply_markup=None
+            )
+        except TelegramBadRequest:
+            pass
+
+    await callback.message.answer(f"💡 <b>Подсказка:</b>\n\n{hint_text}", parse_mode="HTML")
+    await callback.answer()
 
 
 @router.message(LessonState.answering)
@@ -298,8 +361,8 @@ async def check_answer(message: types.Message, state: FSMContext):
         if message.text == "/start":
             await state.clear()  # Сбрасываем состояние!
             # Перенаправляем на start
-            from handlers.start import cmd_start
-            await cmd_start(message)
+            from handlers.start import start
+            await start(message)
             return
         elif message.text == "/profile":
             await state.clear()  # Сбрасываем состояние!
@@ -308,6 +371,7 @@ async def check_answer(message: types.Message, state: FSMContext):
             await profile_handler(message)
             return
         elif message.text == "/help":
+            from handlers.start import HELP_TEXT
             await message.answer(HELP_TEXT)
             return
         else:
@@ -323,8 +387,6 @@ async def check_answer(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     task = data.get("current_solution_task")
-    data = await state.get_data()
-    task = data.get("current_solution_task")
     
     if task is None:
         await message.answer("⚠️ Сессия истекла. Начни урок заново.")
@@ -332,31 +394,142 @@ async def check_answer(message: types.Message, state: FSMContext):
         return
     
     result = await llm_service.check_solution(task, message.text)
-    
-    if result["is_correct"]:
+    is_correct = result["is_correct"]
+
+    # Сохраняем запись в TaskHistory при каждой проверке
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        session.add(TaskHistory(
+            user_id=user.id,
+            lesson_id=data.get("lesson_id"),
+            question=task.get("question", ""),
+            user_answer=message.text,
+            is_correct=is_correct,
+            score=10 if is_correct else 0,
+        ))
+        await session.commit()
+
+    tasks = data.get("tasks", [])
+    current_task_index = data.get("current_task", 0)
+    correct_count = data.get("correct_count", 0)
+    total = len(tasks)
+
+    if is_correct:
+        correct_count += 1
+        await state.update_data(correct_count=correct_count)
         await message.answer(f"✅ {result['feedback']}")
-        
-        # Обновляем стрик только за правильные ответы
+
+        # Обновляем стрик и проверяем достижения
         async with async_session() as session:
-            user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-            await update_streak(session, user)
-        
-        # Переходим к следующей задаче
-        tasks = data.get("tasks", [])
-        current_task_index = data.get("current_task", 0) + 1
-        
-        if current_task_index < len(tasks):
-            await state.update_data(current_task=current_task_index)
-            await send_task(message, tasks[current_task_index], state)
+            await get_or_create_user(session, message.from_user.id, message.from_user.username)
+            user_full = await get_user_profile(session, message.from_user.id)
+            await update_streak(session, user_full, bot=message.bot)
+            new_achievements = await check_and_award(session, user_full)
+
+        for ach_id in new_achievements:
+            await message.answer(_achievement_text(ach_id), parse_mode="HTML")
+
+        next_task_index = current_task_index + 1
+        if next_task_index < total:
+            await state.update_data(current_task=next_task_index)
+            await send_task(message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
         else:
-            await message.answer("🎉 Все задачи выполнены! Отличная работа!")
-            await state.clear()
+            lesson_id = data.get("lesson_id", "")
+            failed_tasks = data.get("failed_tasks", [])
+            text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            await state.set_state(LessonState.reviewing)
     else:
-        await message.answer(
-            f"❌ {result['feedback']}\n\n"
-            f"💡 Подсказка: {task.get('hint', 'Попробуй ещё раз')}\n"
-            f"Попробуй ещё раз:"
-        )
+        wrong_attempts = data.get("wrong_attempts", 0) + 1
+        await state.update_data(wrong_attempts=wrong_attempts)
+
+        if wrong_attempts >= 3:
+            await state.update_data(wrong_attempts=0)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ Следующая задача", callback_data="next_task")]
+            ])
+            await message.answer(
+                f"❌ {result['feedback']}\n\n"
+                f"📖 Правильный ответ: <b>{task.get('answer', '—')}</b>\n"
+                f"💡 {task.get('hint', '')}",
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"❌ {result['feedback']}\n\n"
+                f"💡 Подсказка: {task.get('hint', 'Попробуй ещё раз')}\n"
+                f"Попробуй ещё раз: ({wrong_attempts}/3)"
+            )
+
+
+@router.callback_query(F.data == "next_task")
+async def skip_to_next_task(callback: types.CallbackQuery, state: FSMContext):
+    """Переход к следующей задаче после раскрытия ответа (задача засчитана как неверная)"""
+    data = await state.get_data()
+    tasks = data.get("tasks", [])
+    current_task_index = data.get("current_task", 0)
+    correct_count = data.get("correct_count", 0)
+    total = len(tasks)
+
+    # Фиксируем пропущенную задачу как ошибку
+    failed_tasks: list = data.get("failed_tasks", [])
+    current_task = data.get("current_solution_task")
+    if current_task:
+        failed_tasks = failed_tasks + [current_task]
+        await state.update_data(failed_tasks=failed_tasks)
+
+    next_task_index = current_task_index + 1
+    if next_task_index < total:
+        await state.update_data(current_task=next_task_index, wrong_attempts=0)
+        await send_task(callback.message, tasks[next_task_index], state, task_num=next_task_index + 1, total=total)
+    else:
+        lesson_id = data.get("lesson_id", "")
+        text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await state.set_state(LessonState.reviewing)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "show_errors")
+async def show_errors(callback: types.CallbackQuery, state: FSMContext):
+    """Показывает разбор ошибок сессии"""
+    data = await state.get_data()
+    failed_tasks: list = data.get("failed_tasks", [])
+
+    if not failed_tasks:
+        await callback.answer("Ошибок нет!", show_alert=True)
+        return
+
+    lines = ["📋 <b>Разбор ошибок:</b>\n"]
+    for i, task in enumerate(failed_tasks, 1):
+        lines.append(f"{i}. {task.get('question', '—')}")
+        lines.append(f"   ✅ Правильный ответ: <b>{task.get('answer', '—')}</b>\n")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↩ Назад к итогам", callback_data="back_to_summary")]
+    ])
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_summary")
+async def back_to_summary(callback: types.CallbackQuery, state: FSMContext):
+    """Возвращает к итоговому экрану сессии"""
+    data = await state.get_data()
+    correct_count = data.get("correct_count", 0)
+    tasks = data.get("tasks", [])
+    lesson_id = data.get("lesson_id", "")
+    failed_tasks = data.get("failed_tasks", [])
+    total = len(tasks)
+
+    text, keyboard = _build_final_screen(correct_count, total, lesson_id, bool(failed_tasks))
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.message(Command("cancel"))

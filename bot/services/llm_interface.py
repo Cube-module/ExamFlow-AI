@@ -28,6 +28,11 @@ class LLMService(ABC):
         {'is_correct': bool, 'feedback': '...', 'score': int}"""
         pass
 
+    @abstractmethod
+    async def get_hint(self, task: dict) -> str:
+        """Дать подсказку к задаче, не раскрывая ответ"""
+        pass
+
 
 class GroqLLMService(LLMService):
     def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
@@ -101,6 +106,20 @@ class GroqLLMService(LLMService):
             logger.error("Groq check_solution error: %s", e)
             return {"is_correct": False, "feedback": "Не удалось проверить ответ. Попробуй позже.", "score": 0}
 
+    async def get_hint(self, task: dict) -> str:
+        system = (
+            "Ты репетитор для подготовки к ЕГЭ и ОГЭ. "
+            "Дай подсказку к задаче, НЕ раскрывая ответ. "
+            "Направь ход мысли: укажи метод или шаг, с которого стоит начать. "
+            "Не более 3 предложений. Отвечай на русском языке."
+        )
+        user = f"Задача: {task['question']}"
+        try:
+            return await self._request(system, user, temperature=0.4)
+        except Exception as e:
+            logger.error("Groq get_hint error: %s", e)
+            return "Не удалось получить подсказку. Попробуй позже."
+
 
 class MockLLMService(LLMService):
     async def explain_topic(self, topic: str, user_question: str) -> str:
@@ -121,6 +140,9 @@ class MockLLMService(LLMService):
             "feedback": "Верно!" if is_correct else "Попробуй ещё раз.",
             "score": 10 if is_correct else 0,
         }
+
+    async def get_hint(self, task: dict) -> str:
+        return task.get("hint", "Попробуй вспомнить формулу из теории и подставить данные из условия.")
 
 
 if GROQ_API_KEY:
