@@ -2,6 +2,8 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -17,6 +19,20 @@ router = Router()
 course_service = CourseService()  #  Инициализируем сервис
 
 COURSES_JSON_PATH = Path(__file__).parent.parent / "data" / "courses.json"
+
+
+
+@router.message(Command("profile"))
+async def profile_command_handler(message: Message, state: FSMContext):
+    """Обработчик команды /profile — сбрасывает состояние"""
+    await state.clear()  # Сбрасываем любое активное состояние
+    await profile_handler(message)
+
+@router.message(F.text == "👤 Профиль")
+async def profile_button_handler(message: Message, state: FSMContext):
+    """Обработчик кнопки профиля — сбрасывает состояние"""
+    await state.clear()  # Сбрасываем любое активное состояние
+    await profile_handler(message)
 
 @router.callback_query(F.data == "profile")
 async def profile_callback(callback: types.CallbackQuery):

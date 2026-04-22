@@ -42,15 +42,16 @@ HELP_TEXT = """
 📚 **Быстрая справка:**
 
 **🎓 Обучение:**
-/start — Главное меню и выбор курса
+/start — Главное меню и выбор курс
 /continue — Продолжить с последнего урока 📍
+/reset — Сбросить прогресс текущего курса ⚠️
 /profile — Твой прогресс и статистика 🔥
 
 **❓ Помощь:**
 /help — Эта справка
 /ask <вопрос> — Спросить ИИ-репетитора 🤖
 
-**💡 Как учиться:**
+** Как учиться:**
 1. Выбери курс в меню
 2. Читай теорию и смотри видео
 3. Решай задачи (вводи ответ числом)
@@ -251,7 +252,7 @@ async def course_selected_by_text(message: Message):
         lessons_count = len(module.get("lessons", []))
         text += f"{i}. {title} ({lessons_count} уроков)\n"
         keyboard.append([
-            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course['course_id']}_{module_id}")
+            InlineKeyboardButton(text=f"📖 {title}", callback_data=f"module_{course['course_id']}:{module_id}")
         ])
     
     keyboard.append([
@@ -279,6 +280,10 @@ async def ask_handler(message: Message):
 @router.message(StateFilter(None))
 async def fallback_handler(message: Message):
     courses = course_service.get_all_courses()
+    # ПРОВЕРКА: если это команда — пропускаем
+    if message.text and message.text.startswith("/"):
+        return  # Важно! Пропускаем команды
+    
     await message.answer(
         "Не понял команду. Выбери курс из меню или напиши /help.",
         reply_markup=build_main_keyboard(courses)
