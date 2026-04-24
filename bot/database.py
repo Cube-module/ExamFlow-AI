@@ -17,19 +17,19 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(String, unique=True)
+    telegram_id = Column(String, unique=True, nullable=False)
     username = Column(String)
-    
+    selected_course = Column(String, nullable=True)
+
     # Геймификация
     streak_count = Column(Integer, default=0)
-    last_activity_date = Column(DateTime, default=datetime.utcnow)
+    last_activity_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     freeze_available = Column(Boolean, default=False)
-    
-    # Прогресс курса
-    selected_course = Column(String, nullable=True)
-    current_lesson_id = Column(String, nullable=True)  # ← Добавь это
-    
+    last_reminder_date = Column(DateTime, nullable=True)
+    last_daily_reward_date = Column(DateTime, nullable=True)
+
     progress = relationship("UserProgress", back_populates="user")
     achievements = relationship("UserAchievement", back_populates="user")
 
@@ -39,11 +39,11 @@ class UserProgress(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    course_id = Column(String)
     lesson_id = Column(String)
     status = Column(String)  # 'locked', 'in_progress', 'completed'
     score = Column(Integer, default=0)
     completed_at = Column(DateTime, nullable=True)
-    course_id = Column(String, nullable=True)  # Если нужно
 
     user = relationship("User", back_populates="progress")
 
@@ -59,38 +59,13 @@ class UserAchievement(Base):
     user = relationship("User", back_populates="achievements")
 
 
-class TaskHistory(Base):
-    __tablename__ = "task_history"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    lesson_id = Column(String, nullable=True)
-    question = Column(String)
-    user_answer = Column(String)
-    is_correct = Column(Boolean)
-    score = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
-# bot/database.py
-async def save_user_progress(user_id: int, lesson_id: str, status: str, score: int):
-    async with SessionLocal() as session:
-        progress = await session.get(UserProgress, {"user_id": user_id, "lesson_id": lesson_id})
-        if not progress:
-            progress = UserProgress(user_id=user_id, lesson_id=lesson_id)
-        progress.status = status
-        progress.score = score
-        progress.completed_at = datetime.utcnow() if status == "completed" else None
-        session.add(progress)
-        await session.commit()
-
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Миграция: добавить колонки, которых может не быть в старой БД
         for column_sql in [
             "ALTER TABLE users ADD COLUMN last_reminder_date DATETIME",
-            "ALTER TABLE users ADD COLUMN current_lesson_id VARCHAR",
+            "ALTER TABLE users ADD COLUMN last_daily_reward_date DATETIME",
         ]:
             try:
                 await conn.exec_driver_sql(column_sql)
@@ -98,18 +73,11 @@ async def init_db() -> None:
                 pass  # колонка уже существует
 
 
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload  # Импортируем
-
-async def get_user_profile(session, telegram_id: int):
-    """Получает пользователя с прогрессом и достижениями"""
+async def get_user_profile(session: AsyncSession, telegram_id: int) -> User | None:
     result = await session.execute(
         select(User)
-        .where(User.telegram_id == str(telegram_id))  # Преобразуем в строку
-        .options(
-            selectinload(User.progress),      # Загружаем прогресс
-            selectinload(User.achievements)   # Загружаем достижения
-        )
+        .where(User.telegram_id == str(telegram_id))
+        .options(selectinload(User.progress), selectinload(User.achievements))
     )
     return result.scalar_one_or_none()
 
@@ -129,5 +97,13 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
         await session.commit()
 
     return user
+
+
+class TaskHistory(Base):
+    __tablename__ = "task_history"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

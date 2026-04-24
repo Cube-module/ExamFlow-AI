@@ -15,6 +15,11 @@ from database import async_session, get_user_profile, TaskHistory, User
 from services.achievements import ACHIEVEMENTS
 from services.course_service import CourseService  #  Новый импорт
 
+from datetime import date, datetime
+from sqlalchemy import select, func
+from database import TaskHistory
+from datetime import timezone
+
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -101,6 +106,7 @@ def _progress_bar(done: int, total: int) -> str:
     return f"{bar} {done}/{total}"
 
 
+
 async def _get_weak_topics(session, user: User, min_attempts: int = 2, top_n: int = 3) -> list[tuple[str, int]]:
     """Возвращает топ-N слабых тем: [(lesson_title, percent_correct), ...]"""
     result = await session.execute(
@@ -162,12 +168,34 @@ async def profile_handler(message: Message):
 
     async with async_session() as session:
         user = await get_user_profile(session, message.from_user.id)
+
         if user is None:
             await message.answer("Профиль не найден. Напиши /start, чтобы зарегистрироваться.")
             return
+
+        today = date.today()
+
+        # уроки за сегодня
+        lessons_today = sum(
+            1 for p in user.progress
+            if p.status == "completed"
+            and p.completed_at
+            and p.completed_at.date() == today
+        )
+
+        # задачи за сегодня
+        start_of_day = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+
+        tasks_today = await session.scalar(
+            select(func.count()).select_from(TaskHistory).where(
+                TaskHistory.user_id == user.id,
+                TaskHistory.created_at >= start_of_day
+            )
+        )
+        tasks_today = tasks_today or 0
+
         weak_topics = await _get_weak_topics(session, user)
         readiness_pct = await _get_readiness(session, user, courses_index)
-
     # --- Серия дней ---
     streak_line = _streak_bar(user.streak_count)
     freeze_line = "❄️ Заморозка: доступна" if user.freeze_available else "❄️ Заморозка: нет"
@@ -195,11 +223,15 @@ async def profile_handler(message: Message):
     action_rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="stats_inline")])
     continue_keyboard = InlineKeyboardMarkup(inline_keyboard=action_rows)
 
+    # --- 📅 Сегодня ---
+    lessons_text = "1/1 ✅" if lessons_today >= 1 else f"{lessons_today}/1"
+    tasks_text = "5/5 ✅" if tasks_today >= 5 else f"{tasks_today}/5"
+
     # --- Прогресс по курсам ---
     completed_ids: set[str] = {
         p.lesson_id for p in user.progress if p.status == "completed"
     }
-    # Группируем выполненные уроки по course_id
+
     completed_by_course: dict[str, set[str]] = defaultdict(set)
     for p in user.progress:
         if p.status == "completed" and p.course_id:
@@ -258,9 +290,14 @@ async def profile_handler(message: Message):
 
     lines += [
         f"",
+        f"📅 <b>Сегодня:</b>",
+        f"• Уроков: {lessons_text}",
+        f"• Задач: {tasks_text}",
+        f"",
         f"🎯 <b>Готовность к экзамену: {readiness_pct}%</b>",
         f"  {readiness_bar}",
         f"  {readiness_label}",
+        f"",
         f"",
         f"📊 <b>Прогресс по курсам:</b>",
     ] + progress_lines + [
@@ -273,61 +310,3 @@ async def profile_handler(message: Message):
         f"",
         f"💡 <b>Команды:</b> /help — справка"
     ]
-
-    await message.answer(
-        "\n".join(lines),
-        reply_markup=continue_keyboard,
-        parse_mode="HTML"
-    )
-
-
-@router.message(Command("stats"))
-async def stats_handler(message: Message):
-    async with async_session() as session:
-        user = await get_user_profile(session, message.from_user.id)
-        if user is None:
-            await message.answer("Профиль не найден. Напиши /start.")
-            return
-
-        result = await session.execute(
-            select(TaskHistory).where(TaskHistory.user_id == user.id)
-        )
-        history = result.scalars().all()
-
-    if not history:
-        await message.answer("📊 Ты ещё не решал задачи. Начни практику в любом уроке!")
-        return
-
-    total = len(history)
-    correct = sum(1 for r in history if r.is_correct)
-    incorrect = total - correct
-    correct_pct = round(correct / total * 100)
-    incorrect_pct = 100 - correct_pct
-
-    today = date.today()
-    today_count = sum(
-        1 for r in history
-        if r.created_at and r.created_at.date() == today
-    )
-
-    by_day: dict[date, int] = defaultdict(int)
-    for r in history:
-        if r.created_at:
-            by_day[r.created_at.date()] += 1
-    best_day = max(by_day.values()) if by_day else 0
-
-    await message.answer(
-        "📊 <b>Статистика задач:</b>\n\n"
-        f"• Всего попыток: {total}\n"
-        f"• Правильных: {correct} ({correct_pct}%)\n"
-        f"• Неправильных: {incorrect} ({incorrect_pct}%)\n"
-        f"• Задач сегодня: {today_count}\n"
-        f"• Лучший день: {best_day} задач",
-        parse_mode="HTML"
-    )
-
-
-@router.callback_query(F.data == "stats_inline")
-async def stats_inline_handler(callback: types.CallbackQuery):
-    await stats_handler(callback.message)
-    await callback.answer()

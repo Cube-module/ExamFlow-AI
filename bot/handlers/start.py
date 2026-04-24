@@ -10,6 +10,13 @@ from sqlalchemy import select
 from database import async_session, get_or_create_user, User, UserProgress
 from aiogram import types
 
+import json
+
+from aiogram.types import CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from bot.handlers.start import MAIN_KEYBOARD
+
 logger = logging.getLogger(__name__)
 router = Router()
 course_service = CourseService()
@@ -417,5 +424,5 @@ async def fallback_handler(message: Message):
     
     await message.answer(
         "Не понял команду. Выбери курс из меню или напиши /help.",
-        reply_markup=build_main_keyboard(courses)
+        reply_markup=MAIN_KEYBOARD,
     )
